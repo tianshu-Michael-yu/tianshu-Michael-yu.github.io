@@ -10,3 +10,7 @@ This is actually a blocking call. It first allocate a tenosr on GPU and then cop
 torch.tensor(lst, device="cpu").to(device="cuda", non_blocking = True)
 ```
 This is a proper async way to create a tensor with inital data.
+```
+torch.distributed.batch_isend_irecv(p2p_op_lst)
+```
+If all reference to tensors in the p2p_op_lst is vanshished, this could cause bug, since the tensor might be garbage collected while the async send hasn't finished.
