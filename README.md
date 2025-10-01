@@ -23,3 +23,8 @@ nsys start -o profile.nsys-rep
 # after a short period of time
 nsys stop
 ```
+## Install Nsys
+```
+wget https://developer.nvidia.com/downloads/assets/tools/secure/nsight-systems/2025_2/NsightSystems-linux-cli-public-2025.2.1.130-3569061.deb
+sudo apt install ./NsightSystems-linux-cli-public-2025.2.1.130-3569061.deb
+```
