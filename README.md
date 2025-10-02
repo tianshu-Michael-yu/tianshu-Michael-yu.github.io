@@ -63,3 +63,5 @@ Git will keep narrowing down the range until it identifies the exact commit that
 ```
 git bisect reset
 ```
+## VSCode
+When running in the vscode and your code report an error stack trace. You can `cmd` left click on the file to jump to the line in the stack traced.
