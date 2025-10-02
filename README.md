@@ -28,3 +28,38 @@ nsys stop
 wget https://developer.nvidia.com/downloads/assets/tools/secure/nsight-systems/2025_2/NsightSystems-linux-cli-public-2025.2.1.130-3569061.deb
 sudo apt install ./NsightSystems-linux-cli-public-2025.2.1.130-3569061.deb
 ```
+## Locating the first commit that breaks
+✅ Step-by-step: Using 
+git bisect
+ with commit hashes
+```
+git bisect start
+git bisect bad <bad_commit_hash>
+git bisect good <good_commit_hash>
+```
+Git will now check out a middle commit between the two, and you need to test it manually.
+
+
+---
+
+✅ Then:
+
+- If the bug is present, mark it as bad:
+  ```
+    git bisect bad
+  ```
+
+- If the bug is not present, mark it as good:
+```
+git bisect good
+```
+
+Git will keep narrowing down the range until it identifies the exact commit that introduced the bug.
+
+
+---
+
+✅ Finish and return to original state:
+```
+git bisect reset
+```
