@@ -21,9 +21,10 @@ Luckily, model parallelism gives us clues: in tensor parallelism, each shard per
 ---
 ### Drilling Down
 
+Take TP rank 3 as an example.
+
 ![Alt text](/img/dp_2_tp_4_nsys_timeline_3.png)
 
-Take TP rank 3 as an example.
 We can see the CUDA Graph launch is delayed — that’s the direct cause of the bubble.
 Inspecting the CPU side more closely (by expanding the Threads view in nsys), we find that the CUDA Graph delay stems from gen_context preparation, which itself is blocked by a long zmq_bcast_ctx_meta call.
 
