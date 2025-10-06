@@ -19,6 +19,7 @@ Luckily, model parallelism gives us clues: in tensor parallelism, each shard per
 ![Alt text](/img/dp_2_tp_4_nsys_timeline_2.png)
 
 ---
+
 ### Drilling Down
 
 Take TP rank 3 as an example.
@@ -29,6 +30,7 @@ We can see the CUDA Graph launch is delayed — that’s the direct cause of the
 Inspecting the CPU side more closely (by expanding the Threads view in nsys), we find that the CUDA Graph delay stems from gen_context preparation, which itself is blocked by a long zmq_bcast_ctx_meta call.
 
 ---
+
 ### Forming Hypotheses
 
 Two natural explanations come to mind:
@@ -37,12 +39,14 @@ Two natural explanations come to mind:
 
 Between the two, (2) seems more likely — IPC here uses shared memory (ipc://), so bandwidth shouldn’t be a bottleneck.
 If (2) is true, it means the Python objects inside gen_ctx_meta are simply too large.
+
 ---
 
 ### Verifying the Cause
 Inspecting gen_ctx_meta confirms this: it includes slots_mappings, whose size scales with batch_size × seq_len.
 If serialization takes ~3 ms, deserialization costs another 3 ms — that’s 6 ms of stall per step.
 With long sequences, the delay compounds, causing non-scheduler ranks to launch CUDA Graphs late and leaving visible idle bubbles.
+
 ---
 
 ### Fix and Result
@@ -50,6 +54,7 @@ With long sequences, the delay compounds, causing non-scheduler ranks to launch 
 ![Alt text](/img/dp_2_tp_4_nsys_timeline_4.png)
 
 As you can see, after we remove `slots_mappings` from the data to be sent, the cudagraph for all tp rank starts at approximately the same time and there're no bubbles on the timeline.
+
 ---
 
 ### Takeaway
