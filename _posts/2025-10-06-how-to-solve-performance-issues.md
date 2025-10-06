@@ -1,4 +1,8 @@
-## Blog Post Title From First Header
+## How to solve performance issues
+
+Let's start with a profile of the inference engine. 
+
+![Alt text](/assets/images/dp_2_tp_4_nsys_timeline_1.png)
 
 Due to a plugin called `jekyll-titles-from-headings` which is supported by GitHub Pages by default. The above header (in the markdown file) will be automatically used as the pages title.
 
