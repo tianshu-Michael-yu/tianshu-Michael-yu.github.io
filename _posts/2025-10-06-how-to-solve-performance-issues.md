@@ -46,6 +46,7 @@ With long sequences, the delay compounds, causing non-scheduler ranks to launch 
 ---
 
 ### Fix and Result
+
 ![Alt text](/img/dp_2_tp_4_nsys_timeline_4.png)
 
 As you can see, after we remove `slots_mappings` from the data to be sent, the cudagraph for all tp rank starts at approximately the same time and there're no bubbles on the timeline.
