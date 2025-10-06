@@ -1,5 +1,3 @@
-Here you can say lots of fun things about your site.
+This is my homepage! I will teach you about AI infra. 
 
-Maybe say a some things about yourself.
-
-Or maybe what you plan to blog about.
+Maybe some thoughts on AI research
