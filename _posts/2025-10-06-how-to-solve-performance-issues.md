@@ -10,35 +10,17 @@ As you observed, the most obivous problem is that there're so many bubbles betwe
 
 ![Alt text](/img/dp_2_tp_4_nsys_timeline_2.png)
 
-Let's take tp rank 3 as an example. 
+Let's take tp rank 3 as an example. The reason for the bubble is that the Cudagraph launch is delayed as we can see on the CPU side. But if we inspect the CPU timely more carefully by clicking on the `Threads` dropdown for each process, we understand that the delay of cudagraph is caused by delay of gen_context preparation and that is caused by the abnormally long zmq_bcast_ctx_meta.
 
-Due to a plugin called `jekyll-titles-from-headings` which is supported by GitHub Pages by default. The above header (in the markdown file) will be automatically used as the pages title.
+![Alt text](/img/dp_2_tp_4_nsys_timeline_3.png)
 
-If the file does not start with a header, then the post title will be derived from the filename.
+Here there're two natural hypothesis to explain that.
+1. The interprocess communication is too slow.
+2. The serialization of python objects take too long. 
 
-This is a sample blog post. You can talk about all sorts of fun things here.
+Usually, we have to test each of the hypothesis. However, as a good engineer, my intuition tells me that 2 is more probable. Since the interprocess communication here uses ipc directly instead of network, bandwith shouldn't be a problem. For the second hypothesis to be true, it might be that the python objects in gen_ctx_meta are too large to be serialized. We just need inspect what's inside gen_ctx_meta to verify our hypothesis. Indeed, it turns out that in our inference engine, the `slots_mappings` are stored in gen_ctx_meta and its size is proportional to `batch_size*seq_lens`. If it takes the sender 3ms to serialize the python object, it will take another 3ms to deserialize the python object on the receiver end. In long sequence scenario, it's simply too large so that the non scheduler rank's cudagraph launch will be delayed significantly.
 
----
+![Alt text](/img/dp_2_tp_4_nsys_timeline_4.png)
 
-### This is a header
+As you can see, after we remove `slots_mappings` from the data to be sent, the cudagraph for all tp rank starts at approximately the same time and there're no bubbles on the timeline.
 
-#### Some T-SQL Code
-
-```tsql
-SELECT This, [Is], A, Code, Block -- Using SSMS style syntax highlighting
-    , REVERSE('abc')
-FROM dbo.SomeTable s
-    CROSS JOIN dbo.OtherTable o;
-```
-
-#### Some PowerShell Code
-
-```powershell
-Write-Host "This is a powershell Code block";
-
-# There are many other languages you can use, but the style has to be loaded first
-
-ForEach ($thing in $things) {
-    Write-Output "It highlights it using the GitHub style"
-}
-```
