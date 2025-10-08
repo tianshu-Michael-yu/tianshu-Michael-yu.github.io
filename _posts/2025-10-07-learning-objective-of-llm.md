@@ -1,8 +1,3 @@
----
-title: Learning Objective of LLM
-math: true
----
-
 ## Learning Objective of LLM
 
 The fundamental of llm is to predict next token. In pretrain and SFT, given a sentence as the ground truth,
