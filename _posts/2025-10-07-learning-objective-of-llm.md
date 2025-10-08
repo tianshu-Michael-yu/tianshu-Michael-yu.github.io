@@ -13,8 +13,8 @@ $$
 
 So our goal is to maximize this product. But these probability numbers are extremely small. Multiply them together
 would be close to zero and subject to the hardware round off problem. Instead, we take the log of that probability.
-There're two nice thing about log. It's monotonically increasing, meaning that maximize probability is the same as
-maximize its log. log turns very small number to much managerable number. So we can write our objective function in
+There're two nice things about log. It's monotonically increasing, meaning that maximizing probability is the same as
+maximizing its log. log turns very small numbers to much more manageable numbers. So we can write our objective function in
 a more manageable way.
 
 $$
@@ -22,7 +22,7 @@ $$
 $$
 
 Notice that this expression is negative because probability is smaller than 1. We add a negative sign before that.
-So maximize the probabilty is now minimize the negative log prob. So we get our loss function.
+So maximizing the probability is now minimizing the negative log prob. So we get our loss function.
 
 $$
 \mathrm{Loss} = - \sum \log P(a_t \mid s_t)
@@ -61,17 +61,17 @@ p(k) &= \frac{e^{z(k)}}{\sum_j e^{z(j)}} \\
 \end{aligned}
 $$
 
-$\delta_{ik}$ is a onehot distribution. The distribution that the probability is concentrated on the token $k$. In fact, the above formula can 
-be generalized to other target distribution as well. Let's denote the target distribution $\tau$ and the distribution for the $t^{th}$ output is 
+$\delta_{ik}$ is the Kronecker delta: it equals 1 when $i=k$ and 0 otherwise. It can be viewed as a one-hot target distribution. In fact, the above formula can 
+be generalized to other target distributions as well. Let's denote the target distribution $\tau$ and the distribution for the $t^{th}$ output is 
 $\tau_t$.
 
 Use chain rule to calculate the derivative w.r.t $t^{\mathrm{th}}$ logits.
 
 $$
-\frac{\partial \mathrm{Loss}}{\partial z_t(i)}
-= \frac{\partial \mathrm{Loss}} {\partial p_t(k)} \frac{\partial p_t(k)}{\partial z_t(i)}
-= -\frac{1}{p_t(k)} \, p_t(k)\, \big(\tau_{t} - p_t(i)\big)
-= p_t(i) - \tau_{t}
+\frac{\partial \mathrm{Loss}}{\partial z_t(i)} 
+= \sum_k \frac{\partial \mathrm{Loss}}{\partial p_t(k)} \frac{\partial p_t(k)}{\partial z_t(i)}
+= \sum_k \left(-\frac{1}{p_t(k)}\right)p_t(k)(\tau_t(i) - p_t(i))
+= p_t(i) - \tau_t(i)
 $$
 
 ### Update parameters
@@ -92,7 +92,7 @@ $$
 \begin{aligned}
 \frac{\partial \mathrm{Loss}}{\partial W_{ik}}
 &= \sum_t \frac{\partial \mathrm{Loss}}{\partial z_t(i)} \frac{\partial z_t(i)}{\partial W_{ik}} \\
-&= \sum_t \big(p_t(i) - \tau_t\big) x_{t k}
+&= \sum_t \big(p_t(i) - \tau_t(i)\big) x_{t k}
 \end{aligned}
 $$
 
@@ -101,7 +101,7 @@ Let's write out the updated parameter $W'$ using SGD.
 $$
 \begin{aligned}
 W_{ik}' &= W_{ik}-\eta  \frac{\partial Loss}{\partial W_{ik}} \\
-&= W_{ik} - \eta  \sum_t (p_t(i) - \tau_t)x_{tk}
+&= W_{ik} - \eta  \sum_t (p_t(i) - \tau_t(i))x_{tk}
 \end{aligned}
 $$
 
@@ -110,7 +110,7 @@ Let's also compute the derivative of Loss w.r.t $x$.
 $$
 \begin{aligned}
 \frac{\partial Loss} {\partial x_{tk}} &= \sum_i \frac{\partial Loss}{\partial z_t(i)} \frac{\partial z_t(i)}{\partial x_{tk}} \\
-&= \sum_i (p_t(i) - \tau_t) W_{ik}
+&= \sum_i (p_t(i) - \tau_t(i)) W_{ik}
 \end{aligned}
 $$
 
@@ -121,9 +121,8 @@ is 150K. During pretrain for 30B model, we typically have around 1M tokens per b
 
 $$
 \begin{aligned}
-Sizeof(P) &= vocab\_size \times num\_tokens \times Sizeof(fp32) Bytes \\
-&= 150K \times 1M \times 4 \times 2^{-30} GB \\
-&= 558 GB
+Sizeof(P) &= vocab\_size \times num\_tokens \times Sizeof(fp32) \\
+&= 150K \times 1M \times 4\ \text{bytes} \approx 558\ \text{GB}
 \end{aligned}
 $$
 
