@@ -29,6 +29,7 @@ $$
 $$
 
 ### Calculate the gradient for each logit
+
 Let's set the following notation.
 
 $$
@@ -60,16 +61,21 @@ p(k) &= \frac{e^{z(k)}}{\sum_j e^{z(j)}} \\
 \end{aligned}
 $$
 
+$\delta_{ik}$ is a onehot distribution. The distribution that the probability is concentrated on the token $k$. In fact, the above formula can 
+be generalized to other target distribution as well. Let's denote the target distribution $\tau$ and the distribution for the $t^{th}$ output is 
+$\tau_t$.
+
 Use chain rule to calculate the derivative w.r.t $t^{\mathrm{th}}$ logits.
 
 $$
 \frac{\partial \mathrm{Loss}}{\partial z_t(i)}
 = \frac{\partial \mathrm{Loss}} {\partial p_t(k)} \frac{\partial p_t(k)}{\partial z_t(i)}
-= -\frac{1}{p_t(k)} \, p_t(k)\, \big(\delta_{ik} - p_t(i)\big)
-= p_t(i) - \delta_{ik}
+= -\frac{1}{p_t(k)} \, p_t(k)\, \big(\tau_{t} - p_t(i)\big)
+= p_t(i) - \tau_{t}
 $$
 
 ### Update parameters
+
 Let's update the lm_head. lm_head is usually an unbiased linear layer. The output of lm_head is the logit $z$. Let's denote its weight
 $W$ and input $x$.
 
@@ -86,7 +92,7 @@ $$
 \begin{aligned}
 \frac{\partial \mathrm{Loss}}{\partial W_{ik}}
 &= \sum_t \frac{\partial \mathrm{Loss}}{\partial z_t(i)} \frac{\partial z_t(i)}{\partial W_{ik}} \\
-&= \sum_t \big(p_t(i) - \delta_{ik}\big) x_{t k}
+&= \sum_t \big(p_t(i) - \tau_t\big) x_{t k}
 \end{aligned}
 $$
 
@@ -95,7 +101,7 @@ Let's write out the updated parameter $W'$ using SGD.
 $$
 \begin{aligned}
 W_{ik}' &= W_{ik}-\eta  \frac{\partial Loss}{\partial W_{ik}} \\
-&= W_{ik} - \eta  \sum_t (p_t(i) - \delta_{ik})x_{tk}
+&= W_{ik} - \eta  \sum_t (p_t(i) - \tau_t)x_{tk}
 \end{aligned}
 $$
 
@@ -104,6 +110,22 @@ Let's also compute the derivative of Loss w.r.t $x$.
 $$
 \begin{aligned}
 \frac{\partial Loss} {\partial x_{tk}} &= \sum_i \frac{\partial Loss}{\partial z_t(i)} \frac{\partial z_t(i)}{\partial x_{tk}} \\
-&= \sum_i (p_t(i) - \delta_{ik}) W_{ik}
+&= \sum_i (p_t(i) - \tau_t) W_{ik}
 \end{aligned}
 $$
+
+### Exercise
+
+As you may notice, in order to do the backprogation we need to store $p_t(i)$. But this is very large. A typical tokenizer's vocab size
+is 150K. During pretrain for 30B model, we typically have around 1M tokens per batch. We can calculate the size of $P$.
+
+$$
+\begin{aligned}
+Sizeof(P) &= vocab\_size \times num\_tokens \times Sizeof(fp32) Bytes \\
+&= 150K \times 1M \times 4 \times 2^{-30} GB \\
+&= 558 GB
+\end{aligned}
+$$
+
+A typical H100 only have 80 GB. If this matrix ever materialized, we will certainly run out of device memory. I will left you as an exercise
+to figure out how we can calculate the derivative without having to store this matrix.
