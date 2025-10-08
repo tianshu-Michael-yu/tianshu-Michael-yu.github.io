@@ -74,11 +74,10 @@ Let's update the lm_head. lm_head is usually an unbiased linear layer. The outpu
 $W$ and input $x$.
 
 $$
-\begin{aligned}
-z_t &= W x_t \\
-z_t(i) &= \sum_j W_{ij}\, x_{t j} \\
-\frac{\partial z_t(i)}{\partial W_{ik}} &= x_{t k}
-\end{aligned}
+z_t = W x_t \\
+z_t(i) = \sum_j W_{ij}\, x_{t j} \\
+\frac{\partial z_t(i)}{\partial W_{ik}} = x_{tk} \\
+\frac{\partial z_t(i)}{\partial x_{tk}} = W_{ik}
 $$
 
 So the derivative of Loss w.r.t $W$ is
@@ -88,5 +87,23 @@ $$
 \frac{\partial \mathrm{Loss}}{\partial W_{ik}}
 &= \sum_t \frac{\partial \mathrm{Loss}}{\partial z_t(i)} \frac{\partial z_t(i)}{\partial W_{ik}} \\
 &= \sum_t \big(p_t(i) - \delta_{ik}\big) x_{t k}
+\end{aligned}
+$$
+
+Let's write out the updated parameter $W'$ using SGD.
+
+$$
+\begin{aligned}
+W_{ik}' &= W_{ik}-\eta  \frac{\partial Loss}{\partial W_{ik}} \\
+&= W_{ik} - \eta  \sum_t (p_t(i) - \delta_{ik})x_{tk}
+\end{aligned}
+$$
+
+Let's also compute the derivative of Loss w.r.t $x$.
+
+$$
+\begin{aligned}
+\frac{\partial Loss} {\partial x_{tk}} &= \sum_i \frac{\partial Loss}{\partial z_t(i)} \frac{\partial z_t(i)}{\partial x_{tk}} \\
+&= \sum_i (p_t(i) - \delta_{ik}) W_{ik}
 \end{aligned}
 $$
