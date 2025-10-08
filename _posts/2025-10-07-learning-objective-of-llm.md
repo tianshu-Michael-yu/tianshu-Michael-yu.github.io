@@ -22,36 +22,29 @@ There're two nice thing about log. It's monotonically increasing, meaning that m
 maximize its log. log turns very small number to much managerable number. So we can write our objective function in
 a more manageable way.
 
-{% raw %}
 $$
 \log P(\vec{\text{text}}) = \sum \log P(a_t \mid s_t)
 $$
-{% endraw %}
 
 Notice that this expression is negative because probability is smaller than 1. We add a negative sign before that.
 So maximize the probabilty is now minimize the negative log prob. So we get our loss function.
 
-{% raw %}
 $$
 \mathrm{Loss} = - \sum \log P(a_t \mid s_t)
 $$
-{% endraw %}
 
 ### Calculate the gradient for each logit
 Let's set the following notation.
 
-{% raw %}
 $$
 \begin{aligned}
 y_t &= \log P(a_t \mid s_t) \\
 p_t &= P(a_t \mid s_t)
 \end{aligned}
 $$
-{% endraw %}
 
 Then we can apply chain rule.
 
-{% raw %}
 $$
 \begin{aligned}
 \frac{\partial \mathrm{Loss}}{\partial y_t} &= -1 \\
@@ -59,12 +52,10 @@ $$
 \frac{\partial \mathrm{Loss}}{\partial p_t} &= \frac{\partial \mathrm{Loss}}{\partial y_t} \frac{\partial y_t}{\partial p_t} = -\frac{1}{p_t}
 \end{aligned}
 $$
-{% endraw %}
 
 I will abuse my notation a bit. From now on, we use $p(k)$ to denote $P(a_t \mid s_t)$ where $a_t$ is the $k^{\mathrm{th}}$
 token in the dictionary. $p(k)$ is the output of softmax function applied to the $k^{\mathrm{th}}$ logit, $z(k)$.
 
-{% raw %}
 $$
 \begin{aligned}
 p(k) &= \frac{e^{z(k)}}{\sum_j e^{z(j)}} \\
@@ -73,24 +64,20 @@ p(k) &= \frac{e^{z(k)}}{\sum_j e^{z(j)}} \\
 &= p(k)\,\big(\delta_{ik} - p(i)\big)
 \end{aligned}
 $$
-{% endraw %}
 
 Use chain rule to calculate the derivative w.r.t $t^{\mathrm{th}}$ logits.
 
-{% raw %}
 $$
 \frac{\partial \mathrm{Loss}}{\partial z_t(i)}
 = \frac{\partial \mathrm{Loss}} {\partial p_t(k)} \frac{\partial p_t(k)}{\partial z_t(i)}
 = -\frac{1}{p_t(k)} \, p_t(k)\, \big(\delta_{ik} - p_t(i)\big)
 = p_t(i) - \delta_{ik}
 $$
-{% endraw %}
 
 ### Update parameters
 Let's update the lm_head. lm_head is usually an unbiased linear layer. The output of lm_head is the logit $z$. Let's denote its weight
 $W$ and input $x$.
 
-{% raw %}
 $$
 \begin{aligned}
 z_t &= W x_t \\
@@ -98,11 +85,9 @@ z_t(i) &= \sum_j W_{ij}\, x_{t j} \\
 \frac{\partial z_t(i)}{\partial W_{ik}} &= x_{t k}
 \end{aligned}
 $$
-{% endraw %}
 
 So the derivative of Loss w.r.t $W$ is
 
-{% raw %}
 $$
 \begin{aligned}
 \frac{\partial \mathrm{Loss}}{\partial W_{ik}}
@@ -110,4 +95,3 @@ $$
 &= \sum_t \big(p_t(i) - \delta_{ik}\big) x_{t k}
 \end{aligned}
 $$
-{% endraw %}
