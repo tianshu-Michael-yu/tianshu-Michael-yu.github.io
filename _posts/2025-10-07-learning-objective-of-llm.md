@@ -12,11 +12,9 @@ denote the sentence as $\vec{\text{text}}$. Our objective is to maximize the $P(
 Let's denote the sequence of token in the sentence up to the $(t-1)^{\mathrm{th}}$ token $s_t$.
 Let's denote the $t^{\mathrm{th}}$ token $a_t$.
 
-{% raw %}
 $$
 P(\vec{\text{text}}) = \prod P(a_t \mid s_t)
 $$
-{% endraw %}
 
 So our goal is to maximize this product. But these probability numbers are extremely small. Multiply them together
 would be close to zero and subject to the hardware round off problem. Instead, we take the log of that probability.
