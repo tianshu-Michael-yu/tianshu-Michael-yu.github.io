@@ -7,10 +7,10 @@ math: true
 
 The fundamental of llm is to predict next token. In pretrain and SFT, given a sentence as the ground truth,
 we want the output token at each step more likely to be the token in the ground truth. Let's 
-denote the sentence as \(\vec{\text{text}}\). Our objective is to maximize the \(P(\vec{\text{text}})\).
+denote the sentence as $\vec{\text{text}}$. Our objective is to maximize the $P(\vec{\text{text}})$.
 
-Let's denote the sequence of token in the sentence up to the \((t-1)^{\mathrm{th}}\) token \(s_t\).
-Let's denote the \(t^{\mathrm{th}}\) token \(a_t\).
+Let's denote the sequence of token in the sentence up to the $(t-1)^{\mathrm{th}}$ token $s_t$.
+Let's denote the $t^{\mathrm{th}}$ token $a_t$.
 
 {% raw %}
 $$
@@ -63,8 +63,8 @@ $$
 $$
 {% endraw %}
 
-I will abuse my notation a bit. From now on, we use \(p(k)\) to denote \(P(a_t \mid s_t)\) where \(a_t\) is the \(k^{\mathrm{th}}\)
-token in the dictionary. \(p(k)\) is the output of softmax function applied to the \(k^{\mathrm{th}}\) logit, \(z(k)\).
+I will abuse my notation a bit. From now on, we use $p(k)$ to denote $P(a_t \mid s_t)$ where $a_t$ is the $k^{\mathrm{th}}$
+token in the dictionary. $p(k)$ is the output of softmax function applied to the $k^{\mathrm{th}}$ logit, $z(k)$.
 
 {% raw %}
 $$
@@ -77,7 +77,7 @@ p(k) &= \frac{e^{z(k)}}{\sum_j e^{z(j)}} \\
 $$
 {% endraw %}
 
-Use chain rule to calculate the derivative w.r.t \(t^{\mathrm{th}}\) logits.
+Use chain rule to calculate the derivative w.r.t $t^{\mathrm{th}}$ logits.
 
 {% raw %}
 $$
@@ -89,8 +89,8 @@ $$
 {% endraw %}
 
 ### Update parameters
-Let's update the lm_head. lm_head is usually an unbiased linear layer. The output of lm_head is the logit \(z\). Let's denote its weight
-\(W\) and input \(x\).
+Let's update the lm_head. lm_head is usually an unbiased linear layer. The output of lm_head is the logit $z$. Let's denote its weight
+$W$ and input $x$.
 
 {% raw %}
 $$
@@ -102,7 +102,7 @@ z_t(i) &= \sum_j W_{ij}\, x_{t j} \\
 $$
 {% endraw %}
 
-So the derivative of Loss w.r.t \(W\) is
+So the derivative of Loss w.r.t $W$ is
 
 {% raw %}
 $$
