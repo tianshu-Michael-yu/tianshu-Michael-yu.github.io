@@ -28,12 +28,24 @@ ZMQ provides a safer pattern using a per-process singleton:
 ```python
 class Context:
     _instance = None
+    _instance_lock = Lock()
+    _instance_pid: int | None = None
 
     @classmethod
     def instance(cls, io_threads=1):
-        if cls._instance is None or cls._instance_pid != os.getpid() or cls._instance.closed:
-            cls._instance = cls(io_threads=io_threads)
-            cls._instance_pid = os.getpid()
+        if (
+            cls._instance is None
+            or cls._instance_pid != os.getpid()
+            or cls._instance.closed
+        ):
+            with cls._instance_lock:
+                if (
+                    cls._instance is None
+                    or cls._instance_pid != os.getpid()
+                    or cls._instance.closed
+                ):
+                    cls._instance = cls(io_threads=io_threads)
+                    cls._instance_pid = os.getpid()
         return cls._instance
 ```
 
