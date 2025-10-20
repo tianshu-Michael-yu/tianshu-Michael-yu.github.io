@@ -33,7 +33,7 @@ This allows us to generate higher-quality data than any single model output.
 Instead of relying on humans to rank every response, we can train a *preference model* that predicts which response a human would prefer.
 
 To train this model:
-- For each prompt, we generate two responses: $\vec{\text{text}}_{i}$ and $\vec{\text{text}}_{j}$.
+- For each prompt, we generate two responses: $\vec{\text{text}}_i$ and $\vec{\text{text}}_j$.
 - A human labels which one is better.
 - The preference model learns to assign higher probability to the better response.
 
@@ -46,7 +46,7 @@ $$
 \end{aligned}
 $$
 
-where $hp$ is 1 if $\vec{\text{text}}_{i}$ is preferred, and $\vec{\text{text}}_{w}$ is the winning response.
+where $\vec{\text{text}}_w$ is the winning response.
 
 Once trained, this preference model can automatically rank generations, enabling large-scale rejection sampling without manual labeling.
 
