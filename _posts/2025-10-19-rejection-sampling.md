@@ -50,12 +50,17 @@ where $\vec{\text{text}}_w$ is the winning response.
 
 Once trained, this preference model can automatically rank generations, enabling large-scale rejection sampling without manual labeling.
 
-### Problems of rejection sampling
 
-1. Discrete learning: We are learning in discrete steps where we sample a lot of responses on a lot of prompts and run a round of SFT from improved data. This means we run a lot of parameter upadate over the rejection-sampled data. In theory, our model can do a few small update after we get some good data. And immediately use the slightly improved model to get much better data. That should be more efficient than doing many updates over a large dataset.
+### Limitations of Rejection Sampling
 
-2. No learning from mistakes. We essentially learn nothing from those bad output. The model only gets signal from the best answer. The feedback is purely positive. Model trained this way will lack the capability of correct itself when it starting with a bad responses. This is especially true for math reasoning, where starting with the right reasoning is rare and it almost always involves try and error.
+1. **Inefficient and Discrete Learning**
+   Rejection sampling operates in large, separate rounds of data generation and training. The model generates many responses, selects the best ones, and then performs many gradient updates on this fixed dataset. This process is inefficient because improvements to the model happen only after an entire batch of data is processed, rather than continuously. Ideally, the model should learn incrementally—improving slightly and immediately using that improvement to generate better data.
 
-3. High Computation Cost: Generating many samples per prompt is wasteful, espeically for large models. If we generate 10 candidates for each of 100k prompts, that's 1 million model forward passes to sift out 100k best samples.
+2. **No Learning from Mistakes**
+   Only the best response for each prompt is kept, while all other responses are discarded. This means the model receives purely positive feedback and learns nothing from incorrect or suboptimal outputs. In tasks like math or reasoning—where trial and error is essential—ignoring the “failed attempts” wastes valuable learning signals.
 
-4. Model Collapse and Bias: If we always pick the single highest-scoring answer according to a fixed criterion, we risk overoptimizing the model on that criterion. The model might start giving very narrow, optimized answer that the scorer loves but lack diversity or even coherence. Repeatedly fine-tuning on only top outputs pusing the model into areas where the scoring model is not well calibrate, causing garbage output that the scorer misteaknely rates high. This is very akin to reward hanking, where the model exploit weaknesses in the scoring system. 
+3. **High Computational Cost**
+   Rejection sampling requires generating multiple responses per prompt. For example, sampling 10 responses for each of 100k prompts results in 1 million forward passes, even though only 100k of those responses are used. This is extremely inefficient, especially when working with large models where inference is expensive.
+
+4. **Risk of Model Collapse and Bias**
+   By always selecting the single highest-scoring response, the model may overfit to the scoring criteria of the preference model. Over time, this can reduce diversity and lead to reward hacking—where the model learns to exploit flaws in the preference model rather than genuinely improve response quality. This can result in outputs that score well but are unhelpful or incoherent.
