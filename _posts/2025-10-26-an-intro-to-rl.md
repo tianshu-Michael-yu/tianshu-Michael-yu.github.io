@@ -49,7 +49,7 @@ nudges the model toward actions that outperform its current average behavior.
 
 ### Value Function
 
-We have been using the value function $V_M(\cdot)$ without defining it formally. Intuitively, it is the average reward the model expects if it continues generating tokens starting from the partial sequence $\vec{s}_{t}$. Formally, let $A_t$ denote a continuation $a_t, a_{t+1}, \ldots, a_T$ sampled from the model. Then
+We have been using the value function $V_M(\cdot)$ without defining it formally. Intuitively, it is the average reward the model expects if it continues generating tokens starting from the partial sequence \\(\vec{s}_{t}\\). Formally, let $A_t$ denote a continuation $a_t, a_{t+1}, \ldots, a_T$ sampled from the model. Then
 
 $$
 \begin{aligned}
