@@ -60,7 +60,7 @@ V_M(\vec{s}_t)
 \end{aligned}
 $$
 
-At the end of the sequence, $\vec{text} = \vec{s}_{T+1}$, so $V_M(\vec{s}_{T+1}) = R(\vec{text})$. Put together, we have the familiar recursive relationship:
+At the end of the sequence, $$\vec{text} = \vec{s}_{T+1}$$, so $$V_M(\vec{s}_{T+1}) = R(\vec{text})$$. Put together, we have the familiar recursive relationship:
 
 $$
 \begin{aligned}
