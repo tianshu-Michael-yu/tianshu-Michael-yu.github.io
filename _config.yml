@@ -26,6 +26,8 @@ markdown: kramdown
 kramdown:
   input: GFM
   math_engine: katex
+  gfm_quirks:
+    - math_spans
   syntax_highlighter_opts:
     disable: true
 
