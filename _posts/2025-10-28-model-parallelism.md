@@ -1,72 +1,69 @@
-
 # Model Parallelism
+Model parallelism shards a single model across multiple devices so we can train or serve networks that exceed the memory or compute budget of one GPU. This post organizes the three common flavors -- tensor, pipeline, and expert parallelism -- and then looks at how they combine in real-world inference stacks.
 
-Model parallelism shards the model 
+## Core Parallel Strategies
 
-### Tensor Parallelism (TP)
-Let our model be $Y=XA$. We can split our models along its columns $A = [A_1, A_2]$. Then
-
-$$
-[Y_1, Y_2] = [XA_1, XA_2]
-$$
-
-Because of this we can do the computation $Y_1=XA_1$ and $Y_2=XA_2$ on two gpus. We split the same weight tensor onto two GPUs hence the name tensor parallelism.
-TP cut latency, and ideally it cut latency into half, since you are doing the same computation A in parallel on two GPUS.
-
-### Pipeline Parallelism (PP)
-
-Let our model have two stages A, B, meaning the model do $ Z=XAB $. We can split the computation to two steps.
+### Tensor Parallelism
+Consider a single linear layer $Y = X A$ with weight matrix $A = [A_1, A_2]$. Splitting by columns lets us compute the outputs independently:
 
 $$
-Y=XA \\
-Z=YB
+[Y_1, Y_2] = [X A_1, X A_2]
 $$
 
-We can compute Y on GPU0, send Y to GPU1 and compute Z on GPU1. Since when GPU1 is doing computation for Z, GPU0 is idle. We can add another input to keep the pipeline busy. Below is an illustration of the pipeline, where $X_1, X_2, X_3$ are just different inputs. 
+Each shard $A_i$ sits on a different GPU, so the multiplications happen in parallel before the results are concatenated. Tensor parallelism (TP) reduces latency for wide layers because identical operations run concurrently on separate devices. Practically, TP pairs well with high-bandwidth links such as NVLink; across slower interconnects the cost of synchronizing partial results can dominate.
 
-|Time| 0       | 1      | 2      | 3      |
-|-----|:------:|:------:|:------:|:------:|
-|GPU 1|        | $Y_1B$ | $Y_2B$ | $Y_3B$ |
-|GPU 0| $X_1A$ | $X_2A$ | $X_3A$ |        |
+### Pipeline Parallelism
+Pipeline parallelism (PP) slices the model by depth instead of width. If a network is composed of stages $A$ and $B$, the forward pass applies them sequentially:
 
-PP doesn't cut latency, it even slightly degrades it. Originally you just do the operation of A and B in series on the same device, now you just do them serially on different device with the added latency of interdevice communication. 
+$$
+Y = X A,\qquad Z = Y B
+$$
 
-### Expert Parallelism (EP)
+With PP, GPU0 runs stage $A$ and streams the intermediate activations to GPU1, which runs stage $B$. After the pipeline is filled, multiple inputs flow simultaneously through different stages:
 
-![Alt text](/img/moe_layer.png)
+| Time | 0       | 1       | 2       | 3       |
+|------|:-------:|:-------:|:-------:|:-------:|
+| GPU0 | $X_1A$  | $X_2A$  | $X_3A$  |         |
+| GPU1 |         | $Y_1B$  | $Y_2B$  | $Y_3B$  |
 
-Expert is a more specialized type of parallelism. They can only be applied for Mixture of Experts (MoE) models. The moe model route a token to its corresponding expert (in practice, maybe several experts). You can think the expert is just a linear layer for now (in practice, usually an mlp layer). You do the normal computation and send back the token. The key is that a MoE layer have many experts $A_1, A_2, ..., A_n$. But each token will only activate a subset of the expert. So not all parameters used in the computation of a token. In expert parallelism, we place each expert on a different GPU (or more practically, several experts on a GPU). For instance, if your token activate parameter $A_l$, only the GPU hosting that parameter is active, while all other GPU are idle. So we usually schedule a batch of tokens and hoping that those tokens are distributed to different experts evenly that each GPU process the same amount of compute. 
+PP typically does not shrink per-sample latency -- operations still happen in series, now with added communication cost. Its strength is throughput: keeping all devices busy when large batches stream through the model.
 
-Whether expert parallelism cuts latency is more complicated. If the token needs to activate multiple parameters and those parameters on different GPU, it could cut the latency. But if all activated parameter for that token is on the same GPU, then no latency benefit. So load balancing is important for EP.
+### Expert Parallelism
+![Mixture-of-Experts routing](/img/moe_layer.png)
 
-## Application of model parallelism in inference and serving
+Expert parallelism (EP) targets Mixture-of-Experts (MoE) architectures. An MoE layer owns many experts $A_1, A_2, \dotsc, A_n$, but a router activates only a subset per token. In EP we place different experts on different GPUs (or groups of GPUs). Routing sends the token to the device that hosts the selected expert, performs the computation, and gathers the results.
 
-Real models are not simple linear layers. It has complicated structures.
+Load balancing is the central challenge: if tokens concentrate on a single expert, one GPU becomes a bottleneck while others idle. When the routers distribute tokens evenly, EP can reduce latency for large MoE layers because multiple experts run concurrently. When they do not, the extra all-to-all communication and synchronization can hurt performance.
 
-![Alt text](/img/tensor_parallelism.png)
+## Communication Patterns in Transformer Blocks
+Real transformer stacks combine tensor and pipeline parallelism. The schematic below highlights how a transformer block is partitioned for TP, while PP slices the network across blocks.
 
-The above is how TP partition the self-attention and MLP blocks. PP simply partitons model along transformer blocks. (A transformer block is consist of self-attention and MLP blocks.) In real TP, each transformers blocks require two all reduces operation, while in PP, each transformers blocks require two send-recv operation (except the first block and the last block).
+![Tensor-parallel transformer block](/img/tensor_parallelism.png)
 
-Let the hidden_state (Z) size to be $h_{size}$. Let a model's TP size is n. This means we shard the model using the above TP method into n shards. One all-reduce's communication cost per gpu (assuming RingAllreduce Algorithm) is $4(n-1)\frac{h_{size}}{n}$. Let the model's PP size to be m. One send/recv communication kernel's cost per is $h_{size}$. So per kernel wise, TP's communication operator consumes four times more communication bandwith than PP. Also, the total amount of all-reduce in a tranformers is proportional to the number of layers, while the number of send/recv only depends on the PP size. Let a transformer have $k$ layers. The total amount of communication cost per GPU for TP is $8k(n-1)\frac{h_{size}}{n} \approx 8kh_{size}$, while the total amount of communication cost per GPU for PP is $(m-1)h_{size}$. Most model have more than $28$ layers, while it's rare we need PP size more than 16. So the communication cost of TP dwarfs that of PP. Because within a node, we can leverage the high bandwith communication method NVLink, we usually only do TP within a node and do PP across nodes with the less impressive RDMA connection. 
+In TP, each transformer block issues two all-reduce operations -- one inside self-attention, another inside the MLP. Assuming TP size $n$ and hidden dimension $h_{\text{size}}$, the per-GPU cost of a ring all-reduce is roughly $4 (n-1) \frac{h_{\text{size}}}{n}$. Because every block triggers this pattern, total communication scales with the number of layers $k$: about $8 k h_{\text{size}}$ per GPU.
 
-![Alt text](/img/intra-and_inter-layer_parallelism.png)
+PP communication is simpler. Each boundary between pipeline stages introduces a send/receive pair whose size is $\approx h_{\text{size}}$. The number of such transfers depends on the number of pipeline stages $m$ rather than the number of layers. Since TP's all-reduces are heavier and more frequent, we usually keep TP within a node where NVLink mitigates the cost, and rely on PP across nodes over slower RDMA links.
 
-As we mentioned above, PP can't cut per token latency, so PP can't help much in the decode stage in improving latency. However, PP can help improve the time to first token (TTFT) latency. 
+![Intra- and inter-layer parallelism](/img/intra-and_inter-layer_parallelism.png)
 
-![Alt text](/img/PPvsCPP.png)
+## Latency in Prefill vs. Decode
+![Pipeline vs. continuous pipeline](/img/PPvsCPP.png)
 
-As the picture showed, this is because that in the prefill stage, we already know all the tokens in the context. We can schedule all tokens in the context to the pipeline without having to wait for the processing of the previous token. This helps the prefilling stage to finish much faster hence reducation in TTFT.
+Pipeline parallelism shines during the prefill phase of large language model serving. When the full prompt is known, we can keep the pipeline saturated by sending tokens back-to-back, which improves time-to-first-token (TTFT). During autoregressive decoding, however, each new token depends on the previous output; PP cannot hide the serialized dependency, so it offers little per-token latency gain.
 
-In online serving, we usually disaggregate prefill and decode. On the machine which we purely run prefill, PP is a very useful strategy.
+![Multi-node expert parallelism](/img/multi_node_ep.webp)
 
-EP on the other hand is tricky. We will just touch on one thing about EP here. 
+Expert parallelism introduces another layer of synchronization. EP relies on all-to-all communication to route tokens from each data-parallel (DP) rank to the right experts and back again. With $l$ EP ranks and a router that selects `top_k` experts per token, the per-GPU volume is about $\frac{top_k \, h_{\text{size}}}{l}$. Theoretically, larger expert groups reduce the volume, but in practice all-to-all is difficult to optimize. A single slow rank delays the entire group, so uneven routing can cripple throughput.
 
-![Alt text](/img/multi_node_ep.webp)
+## Practical Considerations
+Many modern models, such as Qwen3, use Grouped Query Attention (GQA) where a small set of key/value heads is shared across many query heads. If TP shards the attention heads beyond the number of key/value groups, each GPU must replicate the key/value weights and cache, wasting memory and synchronization time. For this reason practitioners often cap TP at the number of KV heads; with Qwen3-235B-A22B that means TP <= 4.
 
-EP uses this all-to-all communication to route tokens from different Data Parallel (DP) rank to different experts and after computation, use another all-to-all to route those token back to their respective DP rank. The communication cost for an all-to-all per GPU is $\frac{top_kh_{size}}{l}$, assuming there're $l$ EP rank, where $top_k$ is the number of experts each token will be routed to. So ideally, as EP sizes grows, the communication volume per GPU actually goes down. In practice, all to all is notoriously hard to be implemented efficiently. PP's send/recv are not synchronized ops for the entire PP group, while every member in the ep group need to wait for all peers to send their shard. If one rank is slow, everyone is slowed down. It's hard for EP to be load balanced, because it's perfectly possible that all token will be routed to one expert, which exceberate the problem.  
+Serving budgets underscore these trade-offs. Each NVIDIA H100 provides 80 GB of memory. With 235 B parameters stored in bfloat16, the weights alone consume $235 \times 2 \text{ bytes} \approx 470 \text{ GB}$. If deployed on 1 node of 8 H100, each GPU only have about 20GB for kv cache, which is not enough for efficient serving.  Deploying across two nodes with eight H100s each gives 16 GPUs total is a more reasonable choice. Choosing TP = 4 and PP = 4 creates 16 shards -- one per GPU -- which fits the weights while leaving room for key/value cache.
 
-### More things to consider in actual serving
+In practical online serving, prefill and decode workload is often disaggregated. Prefill-heavy nodes lean on PP for throughput, while decode-focused nodes stay conservative with TP to avoid redundant KV replication.
 
-A lot of model, such as Qwen3, uses Grouped Query Attention (GQA). In GQA, each kv heads are shared by a group of q heads. So usually the number of kv heads are very small. In Qwen3-235B-A22B, the num of kv_heads are only 4. So in this case, if you do TP=8, you must duplicate kv heads and their corresponding kv cache on each GPU. This will waste both time and compute. So if you care about throughput, we usually restrict our tensor parallel size to 4.
-
-Let's take Qwen3-235B-A22B as an example. Since one H100 GPU has 80GB of memory and the model weight is `bfloat16`, if we use 8 H100 to serve, we only have $80-235 \times 2 / 8 = 21.25 GB$, which is not enough for kv cache. So we usually serves using 2 node. Each node have 8 H100. Based on the above discussion we typically use TP=4, PP=4. This gives 16 shards of the model that can be fit on all of the 16 H100 on the 2 node.
+## Takeaways
+- Use TP to split wide layers, but keep it within nodes to leverage high-bandwidth links.
+- Combine PP with large batch sizes or prefill workloads to maximize utilization and lower TTFT.
+- Deploy EP only when MoE routing is well balanced; otherwise the all-to-all overhead can dominate.
+- Tune TP and PP jointly based on memory, interconnect, and architectural constraints such as GQA.
