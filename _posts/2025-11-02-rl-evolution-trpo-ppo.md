@@ -4,7 +4,7 @@ In the previous post, [An Intro to RL]({% post_url 2025-10-26-an-intro-to-rl %})
 
 To recap, the REINFORCE loop looks like this:
 
-1. Collect a dataset $S$ of trajectories with the current policy $M$.
+1. Collect a dataset $$S$$ of trajectories with the current policy $$M$$.
 2. Update the parameters of $M$ for a few gradient steps by minimizing the loss $$-\frac{1}{|S|} \sum_i \sum_t A_M(a_{it}, s_{it}) \log \pi_M(a_{it} \mid s_{it})$$.
 3. Repeat the process with fresh data.
 
