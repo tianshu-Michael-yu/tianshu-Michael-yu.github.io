@@ -6,12 +6,10 @@ To recap, the REINFORCE loop looks like this:
 
 1. Collect a dataset $S$ of trajectories with the current policy $M$.
 2. Update the parameters of $M$ for a few gradient steps by minimizing the loss:
-
-$$
--\frac{1}{|S|} \sum_i \sum_t A_M(a_{it}, s_{it}) \log \pi_M(a_{it} \mid s_{it}).
-$$
-
-3. Repeat the process with fresh data.
+    $$
+    -\frac{1}{|S|} \sum_i \sum_t A_M(a_{it}, s_{it}) \log \pi_M(a_{it} \mid s_{it}).
+    $$
+3. Repeat the process from fresh data.
 
 REINFORCE performs stochastic gradient ascent on the objective $\mathbb{E}_{s,a \sim \pi_M}[A_M(a, s)]$, where $A_M$ is an estimate of the advantage under policy $M$.
 
