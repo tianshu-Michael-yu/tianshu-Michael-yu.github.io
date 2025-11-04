@@ -10,7 +10,7 @@ $$
 [Y_1, Y_2] = [X A_1, X A_2]
 $$
 
-Each shard $A_i$ sits on a different GPU, so the multiplications happen in parallel before the results are concatenated. Tensor parallelism (TP) reduces latency for wide layers because identical operations run concurrently on separate devices. Practically, TP pairs well with high-bandwidth links such as NVLink; across slower interconnects the cost of synchronizing partial results can dominate.
+Each shard $A_i$ sits on a different GPU, so the multiplications happen in parallel. Tensor parallelism (TP) reduces latency for wide layers because identical operations run concurrently on separate devices. Practically, TP pairs well with high-bandwidth links such as NVLink; across slower interconnects the cost of synchronizing partial results can dominate.
 
 ### Pipeline Parallelism
 Pipeline parallelism (PP) slices the model by depth instead of width. If a network is composed of stages $A$ and $B$, the forward pass applies them sequentially:
