@@ -12,11 +12,11 @@ To recap, the REINFORCE loop looks like this:
     $$
 3. Repeat the process from fresh data.
 
-REINFORCE performs stochastic gradient ascent on the objective $\mathbb{E}_{s,a \sim \pi_M}[A_M(a, s)]$, where $A_M$ is an estimate of the advantage under policy $M$.
+REINFORCE performs stochastic gradient ascent on the objective $\mathbb{E}_{a \sim \pi_M, s \sim d^{\pi_M}}[A_M(a, s)\log \pi_M(a \mid s)]$, where $A_M$ is the advantage under policy $M$ and $d^{\pi_M}(s)$ is the probability of the policy $M$ ever generated the sequence $s$. 
 
 ### Trust Region Policy Optimization (TRPO)
 
-This basic loop hides a subtle problem. Let $M_0$ denote the policy that generated the data in step 1, and let $M_1$ be the updated policy in step 2. Although we optimize $M_1$, the trajectories come from $M_0$, so the gradient is biased. The standard fix is importance sampling, a technique for estimating expectations under one distribution using samples from another.
+This basic loop hides a subtle problem. Let $M_0$ denote the policy that generated the data in step 1, and let $M_1$ be the updated policy in step 2. Although we optimize $M_1$, the trajectories come from $M_0$, so the gradient is biased. Also calculating the advantage over the old policy is much easier so we use $A_0$ in place of $A_1$. The standard fix is importance sampling, a technique for estimating expectations under one distribution using samples from another.
 
 Suppose we want $\mathbb{E}_{x \sim p}[f(x)]$ but only have samples from $q$. We can rewrite the expectation as:
 
@@ -27,7 +27,7 @@ $$
 Applying this to REINFORCE with $\pi_0 = \pi_{M_0}$ and $\pi_1 = \pi_{M_1}$ gives:
 
 $$
-\mathbb{E}_{s,a \sim \pi_1}[A_1(a, s)] = \mathbb{E}_{s,a \sim \pi_0}\left[\frac{\pi_1(a \mid s)}{\pi_0(a \mid s)} A_0(a, s)\right].
+\mathbb{E}_{a \sim \pi_1}[A_0(a, s)] = \mathbb{E}_{a \sim \pi_0}\left[\frac{\pi_1(a \mid s)}{\pi_0(a \mid s)} A_0(a, s)\right].
 $$
 
 This leads to a weighted loss:
