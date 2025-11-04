@@ -11,13 +11,13 @@ $$
 Minimizing this loss is equivalent to maximizing the model’s expected reward,
 
 $$
-\text{REINFORCE Objective} = \mathbb{E}_{\vec{text} \sim P} [R(\vec{text})],
+\text{REINFORCE Objective} = \mathbb{E}_{\vec{text} \sim P} [R(\vec{text})\log P(\vec{text}_i)],
 $$
 
 which is a direct contrast to the SFT objective that implicitly assumes a binary reward:
 
 $$
-\text{SFT Objective} = \mathbb{E}_{\vec{text} \sim P} [\mathbf{1}_{A}(\vec{text})].
+\text{SFT Objective} = \mathbb{E}_{\vec{text} \sim P} [\mathbf{1}_{A}(\vec{text})\log P(\vec{text}_i)].
 $$
 
 ### Why We Need a Baseline
