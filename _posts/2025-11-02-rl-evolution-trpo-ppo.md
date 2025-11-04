@@ -24,7 +24,7 @@ $$
 \mathbb{E}_{x \sim p}[f(x)] = \sum_x p(x) f(x) = \sum_x q(x) \frac{p(x)}{q(x)} f(x) = \mathbb{E}_{x \sim q}\left[\frac{p(x)}{q(x)} f(x)\right].
 $$
 
-Applying this to REINFORCE with $\pi_0 = \pi_{M_0}$ and $\pi_1 = \pi_{M_1}$ gives:
+Applying this to our objective with $\pi_0 = \pi_{M_0}$ and $\pi_1 = \pi_{M_1}$ gives:
 
 $$
 \mathbb{E}_{a \sim \pi_1}[A_0(a, s)] = \mathbb{E}_{a \sim \pi_0}\left[\frac{\pi_1(a \mid s)}{\pi_0(a \mid s)} A_0(a, s)\right].
