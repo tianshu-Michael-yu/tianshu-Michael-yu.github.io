@@ -4,7 +4,7 @@ Git is far more powerful than the routine add–commit–push loop. Below are tw
 ### Merge a Divergent Feature Branch
 Sometimes a long-running `dev` branch carries dozens of experimental commits, but you want a single polished commit on `main`. A careful squash-and-cherry-pick flow keeps history readable and limits risk on `main`.
 
-1. **Inspect the history.** Find the first commit where real work begins so you know what to keep. A quick view is `git log --oneline main..dev`.
+1. **Inspect the history.** Find the commit just before the first commit where real work begins so you know what to keep. Quick tip: Use gitlens to find the branching point
 2. **Squash the work.** Soft-reset to the commit just before the real work, which leaves your changes staged, then create the clean commit.
 
    ```bash
