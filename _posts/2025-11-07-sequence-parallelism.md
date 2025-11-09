@@ -1,38 +1,38 @@
 # Sequence Parallelism
 
-In our previous post, [Model Parallelism]({% post_url 2025-10-28-model-parallelism %}), we introduced model parallelism. It shards the size of the model. Since in online serving, the number of tokens in a batch is small, model weight dominates the memory consumption. Model parallelism is more common in serving. In training, however, the amount of data in a batch can be much larger than the weight of the model, so we need to shard the data. There're two dimensions when we parallelize the data. A sequence is a sequence of tokens, which we interested in their relationship. In a batch we can have mulitple sequences. We can parallelize across different sequence, which is data parallel and parallelization within sequence, which is sequence parallelism. We will discuss sequence parallelism in this post.
+In our previous post, [Model Parallelism]({% post_url 2025-10-28-model-parallelism %}), we focused on sharding model weights to make massive networks fit on limited memory. That strategy helps online serving, where batches are tiny and weights dominate the footprint. During training, however, each batch often contains far more token activations than parameters, so splitting models alone is not enough.
+
+A batch can contain multiple sequences, and a sequence is an ordered list of tokens whose relationships we care about. When we parallelize training we have two axes to pick from: shard across independent sequences (traditional data parallelism) or shard within a sequence (sequence parallelism). This post concentrates on the latter and explains how different algorithms handle the dependency structure inside a single long sequence.
 
 ## Attention
 
-All other component in the transformers treats each token the same way except attention. Specifically the positional embedding and scaled dot product are the components that inject positional information and utilize those information.
+Most transformer components treat tokens identically, but multi-head attention must preserve where each token sits in the context window. Positional embeddings inject order, and the scaled dot-product step consumes it. That is why sequence parallelism discussions usually start with attention.
 
 ![Attention](/img/attention_compute_graph.png)
 
-This is a compute graph of attention. The squares are tensors and the circles are operations. The square brackets on each squares describes the shape of the tensor. The sequence length being N means that the sequence have N tokens. Head count refers to the number of attention head. Here we only have one sequence, i.e. batch size is 1. 
+The compute graph above shows attention for a single sequence (batch size 1). Squares are tensors with shapes annotated in brackets, and circles are operations. Sequence length `N` denotes the number of tokens, and `head count` is the number of attention heads. Because attention mixes information along the sequence dimension, we cannot simply split the tokens without introducing communication.
 
 ## Ulysses
 
 ![Ulysses](/img/ulysses_compute_graph.png)
 
-In ulysses, our input is sharded to P different pieces along the sequence dimension. Each GPU only have N/P number of tokens. If we continue doing attention on each GPU without communication, we will only be doing attention for part of the sequence, we will lose the information about the relationship between tokens in different shards. Ulysses change the shard along the sequence dimension to shard along the head dimension through all-to-all communication operator.
-
-Here is a picture of what ulysses all-to-all does. 
+Ulysses shards the input along the sequence dimension into `P` pieces so that each GPU stores only `N/P` tokens. If every GPU ran attention independently, it would only capture dependencies inside its own shard. To avoid that, Ulysses uses an all-to-all exchange that converts the shard axis from sequence positions into attention heads.
 
 ![UlyssesAll2All](/img/ulysses_all_to_all.png)
 
-Here the inputs are the projections of the four tokens: a, b, c, d. For a, a0 is the projection of the 0th q head, a2 is the projection of 1th q head, etc. All the projections of a is on GPU 0, all the projections of b is on GPU 1. After the all-to-all, GPU0 gets b0, c0, d0 from GPU1, 2, 3. Similarly for other GPU. Instead of having all the projections of the same token, each GPU now haves all the tokens projected through the same q head. So the communication cost per GPU is $2\frac{h_{size}}{P^2}(P-1) \approx 2\frac{h_{size}}{P}$. So the benefit of using ulysses is that as you increase the number of sequence parallel rank, the communication cost per GPU is going to decrease.
+In the example, tokens `a`, `b`, `c`, and `d` are split across four GPUs. Before communication, GPU0 holds all projections of token `a`, GPU1 holds token `b`, and so on. The all-to-all redistributes the projections so that each GPU ends up with the same head across every token (GPU0 receives `b0`, `c0`, `d0`, etc.). The per-GPU communication volume is roughly $2\frac{h_{size}}{P^2}(P-1) \approx 2\frac{h_{size}}{P}$, so increasing the number of sequence-parallel shards reduces the cost per rank.
 
-After all-to-all, on each GPU, ulysses can do full-attention for the entire sequence but only with some of the heads to get $P_h$. In order to get the result $P$ of full-attention for the part of the sequence on each rank, the ulysses does the second all-to-all.
+After this reshuffle, each GPU can run full attention over the entire sequence for a subset of heads to obtain $P_h$. A second all-to-all converts the results back so that every rank has the portion of $P$ that corresponds to its original sequence shard.
 
-The advantage of ulysses lies in its implicity. As you will see, the algorithm for ring-attention is much more complex. Also, the communication overhead is relatively low. The disadvantages of ulysses are two fold. First, the degree of sequence parallel is limited by the amount of attention heads. Second, all-to-all communication is sensitive to latency and has certain requirements for network topology. 
+Ulysses is attractive because the algorithm and implementation are simple, and the all-to-all volume is modest. The downsides are (1) the degree of sequence parallelism cannot exceed the number of attention heads, and (2) all-to-all is latency sensitive and expects a supportive network topology.
 
 ## RingAttention
 
-The ring-attention is actually a multi-gpu version of flash-attention. I will show some intuition behind the algorithm. 
+Ring-attention is essentially the multi-GPU version of FlashAttention. The insight is that we can compute partial attention results locally and then renormalize them to recover the global answer.
 
 ![SplitKV](/img/split-kv.png)
 
-k1, k2 is on GPU 1 and k3, k4 is on GPU 2. 
+Suppose $k_1, k_2$ live on GPU1 and $k_3, k_4$ live on GPU2. On GPU1 we compute
 
 $$
 \begin{aligned}
@@ -42,9 +42,7 @@ z_1 &= \exp(q k_1^\top) + \exp(q k_2^\top)
 \end{aligned}
 $$
 
-So on GPU1, if we do attention, we will get our partial result $o_1$
-
-Our objective to caluculate $o$, which is defined by:
+and similarly on GPU2 to obtain $p_2$. The goal is the global result
 
 $$
 \begin{aligned}
@@ -53,30 +51,20 @@ z &= \exp(q k_1^\top) + \exp(q k_2^\top) + \exp(q k_3^\top) + \exp(q k_4^\top)
 \end{aligned}
 $$
 
-If we ignore the normalization factor, our desired result looks very like the summation of $p_1$ and $p_2$. But we can renormalize our partial result. You can check that
-
-$$
-p = \frac{z_1}{z}p_1 + \frac{z_2}{z}p_2
-$$
-
-This basically means that we can do distributed attention calculation on GPU1 and GPU2 to get partial results $p_1$ and $p_2$ and do some communication to get the ultimate result $p$. 
-
-The ring-attention algorithm is built upon this powerful insight. We so far pretend that we have a full copy of $q$ on each rank, but in reality, $q$ is also sharded like $k$ and $v$. The following graph represent how the algorithm go from iteration 1 to iteration 2.
+We can rewrite it as $p = \frac{z_1}{z} p_1 + \frac{z_2}{z} p_2$, meaning local attention followed by a renormalized sum recovers the full answer. The catch is that, in practice, $q$ is also sharded, so we need a systematic way to expose every query chunk to every key/value chunk.
 
 ![RingAttentionRotation](/img/ring-attention-rotation.png)
 
-$P_{ij}$ means the partial result calculated from ith query chunk and jth kv chunk. The $\text{sum}^*$ arrow in the graph is renormalized summation $\frac{z_1}{z}p_1 + \frac{z_2}{z}p_2$ that we showed above. On iteration 1, since KV1 and Q1 are on GPU1, KV2 and Q2 are on GPU2, etc, we get P11 on GPU1, P22 on GPU2, etc. On iteration 2, we send KV1 to GPU2, KV2 to GPU3, etc. This allowed us to calculate P21, P32, P43, and P14 and update our partial result. We do 3 such iterations, then we are going to have the result of full attention for each chunk on each GPU. But KV1 is on GPU4, KV2 is on GPU1, etc. So we need to do another iteration of communication so that the KV chunks go back to where they are started at.
+$P_{ij}$ means the partial result calculated from ith query chunk and jth kv chunk. The $\text{sum}^*$ arrow in the graph is renormalized summation $\frac{z_1}{z}p_1 + \frac{z_2}{z}p_2$ that we showed above.
 
-The full ring-attention algorithm is nicely illustrated in this animation.
+In RingAttention each GPU keeps its query chunk but passes key-value (KV) chunks around the devices in a ring. During iteration 1, GPU1 has Q1 with KV1, GPU2 has Q2 with KV2, etc., producing partial results $P_{11}, P_{22}, \ldots$. On iteration 2 we rotate the KV chunks (KV1 moves to GPU2, KV2 to GPU3, …), enabling the computation of $P_{21}, P_{32}, P_{43}, P_{14}$. After `P` iterations every query chunk has interacted with every KV chunk, and a final rotation restores the KV shards to their original owners.
 
 ![KV-rotate](/img/KV-rotate.gif)
 
-Query chunks remains on each GPU, while key-value chunks rotate through those GPU, hence the name ring-attention. 
-
-Everytimes when we send a KV chunk to another GPU, we bears a communication cost of $4 \frac{h_{size}}{P}$ for each GPU. Since we need to do $P$ iterations, the communication cost for each GPU is $4 h_{size}$. So ring attention have a higher communication overhead than ulysses. However, a nice thing about ring-attention is that we can hide the communication with compute. While you are sending KV1 to GPU2, you can do the attention computation to get P11. So in principle, when the next iteration begins, you already get all the KV chunks ready and you start computation immediately. In theory, communication is free if you hide communication well. This and the fact that ring-attention is not limited by the number of attention heads makes ring-attention potentially more scalable than ulysses despite larger communication cost. Also, ring attention's P2P communication is less strict about the network topology. In the end, the biggest disadvantage of ring attention is its complexity.
+Each KV transfer costs $4 \frac{h_{size}}{P}$ per GPU, and we perform `P` rotations, so the total per-rank volume is $4 h_{size}$—higher than Ulysses. The advantage is that KV transfers overlap nicely with compute; while GPU1 sends KV1 to GPU2 it can simultaneously process the next partial result. With good overlap the communication becomes almost free, RingAttention scales to any number of shards (it is not limited by head count), and it only needs point-to-point links with modest topology requirements. The major drawback is algorithmic complexity.
 
 ## Context Parallelism
 
-Context parallelism (CP) is basically the application of ring-attention in the inference scenario. It's often used in long-context summarization and long reasoning. A critical difference for inference is that inference has kvcache and has decoding stage. In decoding stage, we just need to compute the new token's relationship with all the past context, so the size of the query are much smaller than kvcache. Online serving is usually latency sensitive, so the number of queries in a batch is usually very small. Comparatively, the kvcache grows as the sequence grows. So it make no sense in the long sequence but small batch scenario to rotate kv while making queries fixed. 
+Context parallelism (CP) applies the RingAttention idea to inference workloads such as long-context summarization or long-chain reasoning. In inference we maintain a KV cache and step through decoding token by token. Batches are tiny for latency reasons, so queries are small while the KV cache grows with sequence length. Rotating KV chunks while keeping queries fixed would therefore be wasteful.
 
-In fact the author of Context Parallelism for Scalable Milion-Token Inference argues that in the long sequence decoding scenario, we should rotate query while keeping the kv fixed. This is called Ring Pass-Q. The algorithm for rotating KVCache in inference is called Ring Pass-KV.
+The "Context Parallelism for Scalable Million-Token Inference" paper proposes rotating the queries instead (Ring Pass-Q) and keeping the KV cache stationary. When we do need to move the cache, we use Ring Pass-KV. Together these strategies let inference systems stretch to million-token contexts without giving up the benefits of sequence parallelism.
