@@ -33,6 +33,7 @@ The ring-attention is actually a multi-gpu version of flash-attention. I will sh
 ![SplitKV](/img/split-kv.png)
 
 k1, k2 is on GPU 1 and k3, k4 is on GPU 2. 
+
 $$
 \begin{aligned}
 p_1 &= \text{softmax}([q k_1^\top, q k_2^\top]) [v_1; v_2] \\
@@ -40,9 +41,11 @@ p_1 &= \text{softmax}([q k_1^\top, q k_2^\top]) [v_1; v_2] \\
 z_1 &= \exp(q k_1^\top) + \exp(q k_2^\top)
 \end{aligned}
 $$
+
 So on GPU1, if we do attention, we will get our partial result $o_1$
 
 Our objective to caluculate $o$, which is defined by:
+
 $$
 \begin{aligned}
 p &= \frac{1}{z}[\exp(q k_1^\top), \exp(q k_2^\top), \exp(q k_3^\top), \exp(q k_4^\top)] [v_1; v_2; v_3; v_4] \\
@@ -62,7 +65,7 @@ The ring-attention algorithm is built upon this powerful insight. We so far pret
 
 ![RingAttentionRotation](/img/ring-attention-rotation.png)
 
-$P_ij$ means the partial result calculated from ith query chunk and jth kv chunk. The $\text{sum}^*$ arrow in the graph is renormalized summation $\frac{z_1}{z}p_1 + \frac{z_2}{z}p_2$ that we showed above. On iteration 1, since KV1 and Q1 are on GPU1, KV2 and Q2 are on GPU2, etc, we get P11 on GPU1, P22 on GPU2, etc. On iteration 2, we send KV1 to GPU2, KV2 to GPU3, etc. This allowed us to calculate P21, P32, P43, and P14 and update our partial result. We do 3 such iterations, then we are going to have the result of full attention for each chunk on each GPU. But KV1 is on GPU4, KV2 is on GPU1, etc. So we need to do another iteration of communication so that the KV chunks go back to where they are started at.
+$P_{ij}$ means the partial result calculated from ith query chunk and jth kv chunk. The $\text{sum}^*$ arrow in the graph is renormalized summation $\frac{z_1}{z}p_1 + \frac{z_2}{z}p_2$ that we showed above. On iteration 1, since KV1 and Q1 are on GPU1, KV2 and Q2 are on GPU2, etc, we get P11 on GPU1, P22 on GPU2, etc. On iteration 2, we send KV1 to GPU2, KV2 to GPU3, etc. This allowed us to calculate P21, P32, P43, and P14 and update our partial result. We do 3 such iterations, then we are going to have the result of full attention for each chunk on each GPU. But KV1 is on GPU4, KV2 is on GPU1, etc. So we need to do another iteration of communication so that the KV chunks go back to where they are started at.
 
 The full ring-attention algorithm is nicely illustrated in this animation.
 
