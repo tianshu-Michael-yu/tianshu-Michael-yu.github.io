@@ -1,12 +1,21 @@
 ## Inference Engine
 
-This post will introduce the core components of an inference engine.
+This post introduces the core components of a typical inference engine and how they coordinate to keep a GPU saturated while serving requests.
 
 ![InferenceEngineStructrue](/img/inference_engine_structure.png)
 
-Engine basically orchestrate those workers to complete inference task. Each worker is an independent process that manage one device (e.g. a GPU). Within each worker process, the inferencer does essentially all the GPU work, the model builder essentially load the model shard that will be run on that device. The scheduler defines what goes into each batch and the block usage. The block manager helps the scheduler to mange blocks. This is for paged attention. 
+### Components at a Glance
 
-You may ask the question why don't we simply create out model within the inferencer. That's majorly for the easy of unittest. In reality, the logic for creating the model object and loading model shard efficently is very complicated. But once you have the model shard you don't usually change it much. By separating out the model creation logic, we simplify the behavior of inferencer to simply manage the computation on GPU. We don't need to pass in a complicated config. 
+- **Engine** – entry point that accepts user requests, schedules work, and gathers outputs.
+- **Worker** – one process per accelerator (GPU, TPU, etc.); owns the lifetime of a model shard on that device.
+- **Inferencer** – GPU-heavy component responsible for preparing device tensors, launching kernels, and sampling tokens.
+- **ModelBuilder** – loads the model shard for a worker. Keeping it separate from the inferencer makes unit testing and reloading logic tractable.
+- **Scheduler** – decides which requests form the next batch, how tokens are grouped, and how KV-cache blocks are assigned.
+- **Block manager** – tracks block usage for paged attention so the scheduler knows which memory regions are free or must be evicted.
+
+Separating these roles keeps the inferencer focused on GPU math. Model creation and sharding are complicated and rarely change once data is on the device, so isolating them behind the model builder simplifies the rest of the system.
+
+### Engine Loop
 
 ```python3
 class Engine:
@@ -21,11 +30,15 @@ class Engine:
         while True:
             self._step()
 
-    def _update_output(self)
+    def _update_output(self):
         ...
 ```
 
-The `add_requests` interface allows user to add more request to the engine asynchronously without blocking main operation cycle. It's usually achieved through adding to a waiting queue, while scheduler fetch from this queue to schedule the next batch. The `self._workers.execute` is for invoking a function (e.g. `queue_batch`) in all of those worker process. In practice, it's usually done through rpc call. The `_update_output` is a remote function that the worker can call, when it emit a token or other form of output, so that the user can see the result.
+- **`add_requests`** queues new work without blocking the main loop, which lets user traffic arrive asynchronously.
+- **`_step`** asks the scheduler for the next batch and broadcasts it to workers through RPC (e.g., `queue_batch`).
+- **`_update_output`** is called remotely by workers when they have tokens ready so that the engine can stream results back to clients.
+
+### Worker Responsibilities
 
 ```python3
 class Worker:
@@ -39,8 +52,11 @@ class Worker:
             self._output_processor.process(output)
 ```
 
-The worker gets more batch as the engine sends batch to it through the remote call `queue_batch`. The worker loop is very simple, get the next_batch in the queue, call the inferencer to do the inference and finally let the output processor to process the output. The output processor don't do any real work on GPU. It simply wait for the result of the inference from transfering from GPU to CPU and process it. The processing may also include send the result back to the engine.
+- Workers ingest batches via `queue_batch`, typically invoked by the engine.
+- The worker loop is intentionally tight: fetch the next batch, run inference, ship outputs to the output processor.
+- Output processors live on the CPU side. They wait for GPU→CPU transfers to finish, perform light post-processing, and RPC results back to the engine or a streaming endpoint.
 
+### Inferencer Responsibilities
 
 ```python3
 class Inferencer:
@@ -50,27 +66,30 @@ class Inferencer:
         return self._sampler.sample(output)
 ```
 
-The inferencer manages all the real compute on GPU. It start by preparing context. It's basically a way to pack all the necessary information such as input id, position, attention mask, etc to different tensors and allocate those tensors on GPU. Then `self._forward` do the computation. Finally, if needed, we let the sampler to sample the result token. 
+- **`_prepare_context`** packs inputs, positions, and attention masks into device tensors and allocates the necessary buffers.
+- **`_forward`** launches the actual compute graph on the GPU.
+- **`_sampler`** optionally turns logits into the next token using sampling, greedy decoding, or beam search.
 
 ## Sync to Async
 
-The most naive implementation of the workflow is like the following.
+The most naive workflow keeps every step strictly sequential.
 
 ![NaiveTimeline](/img/naive_inference_timeline.png)
 
-* prep_ctx: Create context for forward. And launch the allocation of those tensor on GPU.
-* forward: On CPU, it's basically launch the computation on GPU. On GPU, it's basically doing the computation
-* proc_out: process the output of GPU computation. This mean we have to wait for the result on GPU.
+- **prep_ctx** – build the context for the forward pass and allocate tensors on the GPU.
+- **forward** – CPU launches kernels while the GPU performs the compute.
+- **proc_out** – wait for the GPU result, transfer it back, and post-process it on the CPU.
 
-One characters of working with GPU is that it allows you to dispatch the GPU work asynchronously. i.e. The CPU doesn't have to wait for the result of GPU unless it's necessary. This allow us to launch many GPU workload to keep GPU busy. The problem is clearly that in this work flow you cannot schedule the next batch until the current batch is completed, sent backed to the CPU, and processed. This creates this bubble where the GPU has to wait for CPU for more work. For a workload like serving qwen3_30b, on 1 H100, the bubble could accounts for a 20% loss in per token latency and throughput.
+Even though GPUs allow asynchronous kernel launches, the above flow blocks on CPU work before scheduling the next batch because it needs the previous batch’s CPU result. That pause—the “bubble”—has the GPU waiting for more work. Serving a model like qwen3_30b on a single H100 can lose ~20% throughput and per-token latency to this bubble.
 
-The solution for this problem is to do async scheduling.
+### Introducing Asynchronous Scheduling
 
 ![AsyncTimeline](/img/async_inference_timeline.png)
 
-Originally proc_out of cycle i will just process the GPU output of cycle i. Now, instead, it process the output from its previous cycle i-1. This way the CPU overhead of postprocessing and scheduling next batch is hidden by the GPU compute.  
+- `proc_out` for cycle *i* now processes the output generated in cycle *i − 1*.
+- CPU post-processing and scheduling happen while the GPU is already working on the next batch, hiding the bubble entirely when things line up.
 
-How can the above code structure achieve this async way of inferencing? We can implement our output processor differently.
+### Output Processor Rework
 
 ```
 class OutputProcessor:
@@ -80,10 +99,14 @@ class OutputProcessor:
     def process(self, output):
         if self._prev_output:
             self._prev_output.synchronize()
-            self._process(prev_output)
+            self._process(self._prev_output)
         self._prev_output = output
 ```
 
-So instead of processing the current output immediately, we process the previous output and then update the prev_output as the current output.
+Instead of processing the current output immediately, we flush the previous one and stash the current result for the next iteration. Synchronization now happens one cycle later, which keeps the GPU busy.
 
-There are many other things need to be changed as well. For instance,  when we prepare the context for cycle i, we don't necessessarily have the result of cycle i-1 ready yet. We need to reserve a space in the input_sequence for cyle i for the result of cycle i-1. This requires the modification of scheduler and prepare_ctx. Another modification is the termination logic. Since in cycle i, we no longer processing the output of cycle i, we don't know if cycle i generated the final token. We will only figure out that in the next cycle. So we always going to do an extra cycle after the termination token. 
+### Additional Adjustments
+
+- **Scheduler/context prep** – when building the context for cycle *i*, the result from *i − 1* may not exist yet, so we allocate space in advance and patch it later.
+- **Termination logic** – because cycle *i* no longer examines its own output, it doesn’t know whether it emitted an end token; we detect completion one cycle later and naturally run one extra iteration.
+- **Back-pressure** – asynchronous pipelines need guardrails (queue depths, outstanding batch caps) so that workers don’t race too far ahead of what the engine or clients can consume.
