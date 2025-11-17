@@ -17,7 +17,7 @@ Separating these roles keeps the inferencer focused on GPU math. Model creation 
 
 ### Engine Loop
 
-```python3
+```python
 class Engine:
     def add_requests(self, requests: List[Request]):
         ...
@@ -40,7 +40,7 @@ class Engine:
 
 ### Worker Responsibilities
 
-```python3
+```python
 class Worker:
     def queue_batch(self, batch):
         ...
@@ -58,7 +58,7 @@ class Worker:
 
 ### Inferencer Responsibilities
 
-```python3
+```python
 class Inferencer:
     def infer(self, batch):
         ctx = self._prepare_context(batch)
@@ -91,7 +91,7 @@ Even though GPUs allow asynchronous kernel launches, the above flow blocks on CP
 
 ### Output Processor Rework
 
-```
+```python
 class OutputProcessor:
     def __init__(self):
         self._prev_output = None
