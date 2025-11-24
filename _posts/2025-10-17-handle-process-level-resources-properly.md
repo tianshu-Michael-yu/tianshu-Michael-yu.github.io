@@ -63,3 +63,7 @@ This ensures:
 ### Takeaway
 
 Never rely on global variables for process-level resources. Use per-process singletons (like `Context.instance()`) to ensure correctness and avoid hard-to-debug distributed errors.
+
+### Other Bugs
+
+Suppose you want each of your process has only one device visible to it. You launch an inference engine where process for rank 0 launches process for other rank using `torch.multiprocessing`. It turns out that you will almost always fail when you set `CUDA_VISIBLE_DEVICES` in the child process. Because `mp` implictly pickled the `torch` imported in rank 0 and send it to other rank, by the time you set the `CUDA_VISIBLE_DEVICES` it's too late. You already use the torch for `rank 0` unless you reimport `torch` again.
