@@ -1,6 +1,6 @@
 ## Pipeline Parallelism in Inference
 
-In the previous post, [Inference Engine]({% post_url 2025-11-22-inference-engine %}), we built an async inference engine. Adding pipeline parallelism (PP) complicates the control flow, especially around send/recv ordering and shutdown. This post walks through the problem and two ordering designs, then lands on a simple loop structure.
+In the previous post, [Inference Engine]({% post_url 2025-11-16-inference-engine %}), we built an async inference engine. Adding pipeline parallelism (PP) complicates the control flow, especially around send/recv ordering and shutdown. This post walks through the problem and two ordering designs, then lands on a simple loop structure.
 
 ### 1) The Naive Pipeline
 
