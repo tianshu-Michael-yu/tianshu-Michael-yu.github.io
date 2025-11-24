@@ -1,10 +1,10 @@
 ## Pipeline Parallelism in Inference
 
-In the previous post, [Inference Engine]({% post_url 2025-11-22-inference-engine %}), we dived into how to develop an async inference engine.
+In the previous post, [Inference Engine]({% post_url 2025-11-22-inference-engine %}), we built an async inference engine. Adding pipeline parallelism (PP) complicates the control flow, especially around send/recv ordering and shutdown. This post walks through the problem and two ordering designs, then lands on a simple loop structure.
 
-If we throws pipeline parallelism into the whole thing, it gets complicated.
+### 1) The Naive Pipeline
 
-Let's show a naive implementation of infer.
+Each rank receives tensors, runs the model, and sends the output to the next rank.
 
 ```python
 class Inferencer:
@@ -13,17 +13,23 @@ class Inferencer:
         output = self._model.forward(ctx)
         self._send_to_next_rank(output, ctx)
 ```
-That mean in each cycle we always start with receiving tensors necessary for doing computation, do the computation and send the output to next rank. The code looks clean and easy to follow. But it produces the following result.
+
+The flow is clean but produces crossing dependencies:
 
 ![PPDeadlock](/img/PPDeadlock.png)
 
-As you can see the dependency arrow cross. This means if the send and recv communication are both blocking operation, there will be a dead lock. For sending GPU tensor, we can put send and recv on different stream, hence no blocking operation. But for sending cpu meta data, we need to use `torch.distributed.send_obj_list` which is a synchronized call.
+If send/recv are blocking (e.g., `torch.distributed.send_obj_list` for CPU metadata), the arrows cross and deadlock. GPU tensors can live on separate CUDA streams, but CPU metadata cannot.
 
-The solution is basically you switch the order of send and recv on either the first pp rank or the last pp rank. In my experience, the first design just works better than the second.
+### 2) Fixing the Ordering
+
+The fix is to flip the send/recv order on either the first or last PP rank.
+
+#### Option A: First-Rank Special-Case (Preferred)
 
 ![GoodPPTimeline](/img/GoodPPTimeline.png)
 
-This is the first design. Basically ever other rank is exactly the naive case, except the first rank.
+Only the first rank differs; all other ranks stay naive.
+
 ```python
 # first rank cycle
 def infer(self, batch, should_recv_out):
@@ -36,11 +42,13 @@ def infer(self, batch, should_recv_out):
         return token_id
 ```
 
-This looks complicated, but all the complexity actually happens at the first rank. `should_recv_out` determines whether the first rank is going to recveive the `token_id` from the last pp rank in this cycle. This signal can be calculated and given by scheduler. This feels natural as the scheduler is really the one that's keeping track of the movement of batches in the system. 
+`should_recv_out` says whether this cycle expects a return token from the last rank. The scheduler already tracks batch movement, so it can provide this flag. Complexity is isolated to the first rank.
+
+#### Option B: Last-Rank Special-Case (Awkward)
 
 ![UglyPPTimeline](/img/UglyPPTimeline.png)
 
-This is the second design. This time both the first rank and the last rank is different. But the first rank follows the patter of doing receiving tensor first, then computation, and then sending the tensor to the next rank. It's the last rank that will looks weird.
+The first rank stays naive; the last rank breaks symmetry and becomes stateful.
 
 ```python
 def infer(self):
@@ -51,20 +59,25 @@ def infer(self):
     self._last_token_id = token_id
 ```
 
-This gives you a rough idea about the weirdness of this design. Suddenly, the inferencer has this weird state called `self._last_token_id` that it has to track across cycle. Remember for the easiness of the test, we always want the call to be stateless. If the behavior of the call changes because of the previous call, it's much harder test. You may also notice the above actually doesn't quite work. What if you don't have more incoming batch? Then, you just stuck on the `self._get_ctx()` call and never send the last `token_id` back. You can fix it by throwing more logic. For instance, you can clearly define cycle on every pp rank so that it matches the cycle on the first rank. The code just becomes ugly really fast. In no time, you find you are doing complex scheduling on the rank that you are not supposed to do any.
+Problems:
+- Introduces hidden state (`_last_token_id`) that complicates testing.
+- Breaks when no new batches arrive; the last token never sends because the loop blocks on `_get_ctx()`.
+- Requires extra scheduling logic on non-first ranks, making the code ugly fast.
 
-This is why the first design is supperior. You can think the first rank just doing all the scheduling and passed the work to other rank, the other ranks completed their work and send final result back. Because all the messy stateful logic is in the first rank, we can concentrate those logic in the scheduler. Then as long as we throughly tested the behavior of the scheduler, we are good. 
+Because Option A keeps all stateful logic on the first rank (owned by the scheduler), it is the better default.
 
-What should cycles be managed on different pp rank in code? Here's a sketch.
+### 3) Loops on Each Rank
 
-```
-class Engine:   
+With Option A, the loops look like this:
+
+```python
+class Engine:
     def first_rank_loop(self):
         while True:
             next_batch, requests_to_receive = self._scheduler.schedule()
             token_ids = self._inferencer.infer(next_batch, requests_to_receive)
-            completed_requests = self._output_processor.process(requests_to_receive, token_ids)
-            self._scheduler.cleanup_requests(completed_requests)
+            completed = self._output_processor.process(requests_to_receive, token_ids)
+            self._scheduler.cleanup_requests(completed)
 
 class Worker:
     def other_rank_loop(self):
@@ -72,6 +85,20 @@ class Worker:
             self._inferencer.infer([])
 ```
 
-This design makes the work on the other rank very simple. Now there's still many details to be filled. One interesting thing is how do you gracefully terminate all those loops? One simple idea is that we can leverage `torch.multiprocessing.Event`. We can have a shutdown event `shutdown_event = mp.Event()` has this as the loop termination condition. If we set the event, all loop will be terminated. But it will not happen. Because by the end, when you don't have any new batches coming in, you loop will be blocked on the waiting to receive new ctx call. You will never move to the while condition. 
+All non-first ranks stay simple; the scheduler drives statefulness on the first rank.
 
-One solution is that you can send a special ctx that tells you that you should shutdown and then the inferencer pass that ctx to the next rank. It's kind of annoying that the return type of the `infer` call can also be a shutdown signal. Another way is that you pass the `next_batch` to the next rank through `mp.Queue`. So in each pp rank we need to do `prepare_ctx` instead of doing `get_ctx` for all other pp rank. We kind of doing some wasteful work every rank but we also simplify the `infer` code quite a bit. As now every rank has similar behaivor now. An added benefit is that `torch.multiprocessing` enable you to pass CPU tensor through shared memory, so you can get those meta data pretty quickly. However, as PP is mostly advantagous in the multinode setting, `torch.multiprocessing` is not going to work. We still have to use `torch.distributed` like the first method. So for all the complexity it involves I think the first solution is still better. 
+### 4) Shutdown Considerations
+
+Simple loop termination via `torch.multiprocessing.Event` is not enough; loops block waiting for `get_ctx()`. Two approaches:
+
+- **Shutdown ctx sentinel:** Send a special ctx through the pipeline to signal exit. This makes `infer` return a shutdown signal, which can be awkward.
+- **Queue batches instead of pull:** Pass `next_batch` via `mp.Queue`; each rank calls `prepare_ctx` instead of `get_ctx`. This simplifies `infer` but does extra per-rank prep. It also only works with `torch.multiprocessing`, not multi-node `torch.distributed`.
+
+Given multi-node PP needs `torch.distributed`, the first-rank special-case with scheduler-driven flags remains the pragmatic choice.
+
+### 5) Takeaways
+
+- Deadlock arises when CPU metadata send/recv are blocking with naive ordering.
+- Flip ordering on a single rank to break the dependency; prefer doing it on the first rank.
+- Keep all scheduling and state on the first rank; keep other ranks stateless and loop-simple.
+- Plan shutdown early; avoid designs that force hidden state on non-first ranks.
