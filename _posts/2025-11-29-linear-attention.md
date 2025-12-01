@@ -10,7 +10,11 @@ V = [v_1, v_2, \ldots, v_n] \in \mathbb{R}^{n \times d} \\
 O = [o_1, o_2, \ldots, o_n] \in \mathbb{R}^{n \times d}
 $$
 
-The core of attention is a mapping $Q, K, V \rightarrow O$. The mapping is usually defined as:
+The core of attention is a mapping $Q, K, V \rightarrow O$.
+
+## Softmax Attention
+
+The mapping is usually defined as:
 
 $$
 O = \text{softmax}(QK^\top+\log M)V
@@ -33,7 +37,7 @@ $$
 
 The denominator here is majorly for numerical stability. If we forget about the causal mask. The core of the attention is really $O=\exp(QK^\top)V$. The problem of softmax attention is that to compute $\exp(QK^\top)$, both space and time complexity are $O(n^2)$
 
-## Beginning of Linear Attention
+## Linear Attention
 
 The first idea of linear attention is to replace the expensive softmax computation with a kernel-based approximation of the attention weight. The kernelized linear attention aims to find a feature mapping $\phi$ such that  $\exp(q \cdot k) \approx \phi(q) \cdot \phi(k)$. Given such $\phi$, one can rewrite attention as:
 
@@ -59,6 +63,8 @@ This is our vanila linear attention. It's clear that the casual form of attentio
 
 ## Linear Attention As Test Time Training
 
+![TTT](/img/TTT.png)
+
 There's a beautiful conceptualization of linear attention as Test Time Training (TTT). TTT can be used to construct RNN. Here's the procdure: Let the current model's parameter be $S_{t-1}$. The optimizer (SGD) receives new data $k_t, v_t$. The optimizer updates the parameter to $S_t$ using the new data and return the prediction result $f(S_{t-1}; q_t)$. So all RNN created with TTT can be written as:
 
 $$
@@ -66,6 +72,8 @@ o_t = f(S_t; q_t), \quad S_t = S_{t-1} - \eta_t \nabla_{S_{t-1}}\mathcal{L}(f(S_
 $$
 
 , where $\mathcal{L}$ is the loss function and $\eta_t$ is the learning rate. 
+
+### Vanilla Linear Attention
 
 Let's set $f, \mathcal{L}, \eta_t$ to be:
 
@@ -99,6 +107,8 @@ $$
 
 This shows that the vanilla linear attention is a special case of TTT.
 
+### DeltaNet
+
 Now we have a nice paradigm to construct RNNs. Why don't we try other loss functions?
 
 Let the loss function be the L2 loss divided by 2:
@@ -129,6 +139,8 @@ $$
 
 This gives us the DeltaNet. 
 
+### GatedDeltaNet and KDA
+
 If we set the loss function to be $\frac{1}{2} ||y-v||^2 + \frac{1-\gamma}{\eta}||S||_F^2$. The update rule becomes 
 
 $$
@@ -151,7 +163,8 @@ $$
 
 This is the Kimi Delta Attention (KDA) presented in the KimiLinear paper.
 
+## Advanced TTT Variants
+
 We don't have restrict ourself to just using different loss functions. We can also experiment with different update rules. For example, in the Titans paper, the author add a momentum term to the SGD update rule. The Test-Time Training Done Right paper has explored the possibility of using Muon optimizer instead of SGD. 
 
-So why is TTT such a powerful paradigm for constructing linear attentions? The core goal of linear attention is just to compress historical data to a fixed sized state. A model's parameter can be also viewed as a fixed sized state. This implies that training a model is not dissimilar to compressing training data to model weight. TTT uses this insight. More formally, if linear attention is a compression task, TTT views the model $f$ as the decoder of the compression task , the weights as the compressed data, the optimizer as the compression algorithm, and the loss function $\mathcal{L}$ as the compression quality metric. 
-
+So why is TTT such a powerful paradigm for constructing linear attentions? The core goal of linear attention is just to compress historical data to a fixed sized state. A model's parameter can be also viewed as a fixed sized state. This implies that training a model is not dissimilar to compressing training data to model weight. TTT uses this insight. More formally, if linear attention is a compression task, TTT views the model $f$ as the decoder of the compression task , the weights as the compressed data, the optimizer as the compression algorithm, and the loss function $\mathcal{L}$ as the compression quality metric.
