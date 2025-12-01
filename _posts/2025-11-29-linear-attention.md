@@ -141,7 +141,7 @@ This gives us the DeltaNet.
 
 ### GatedDeltaNet and KDA
 
-If we set the loss function to be $\frac{1}{2} ||y-v||^2 + \frac{1-\gamma}{\eta}||S||_F^2$. The update rule becomes 
+If we set the loss function to be $$\frac{1}{2} ||y-v||^2 + \frac{1-\gamma}{\eta}||S||_F^2$$. The update rule becomes 
 
 $$
 S_t = \gamma_t S_{t-1} + \eta_t (v_t - S_{t-1}k_t) k_t^\top
