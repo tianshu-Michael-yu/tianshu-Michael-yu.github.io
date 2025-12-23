@@ -1,8 +1,10 @@
-# LFM2 VL Performance Issues
+# LFM2-VL Performance: Two Hidden Host↔Device Syncs in Metadata Building
 
-Currently, most of the perfomance issue for `lfm2-vl` model concentrates in this class. 
+When profiling `lfm2-vl`, most of the “why is my GPU idle?” time showed up *outside* the model kernels—in the attention **metadata builder**. This post documents two concrete bottlenecks I hit, how to spot them in a trace, and the fixes that restored async scheduling.
 
-``` python
+The hot path looked like this (simplified):
+
+```python
 class ShortConvAttentionMetadataBuilder(
     BaseMambaAttentionMetadataBuilder[ShortConvAttentionMetadata]
 ):
@@ -33,7 +35,7 @@ class ShortConvAttentionMetadataBuilder(
                 ]
                 > 0
             )
-            has_initial_states_p = has_initial_states_cpu.to(query_start_loc.device) # Problem 1
+            has_initial_states_p = has_initial_states_cpu.to(query_start_loc.device)  # Problem 1
 
             query_start_loc_p = (
                 common_attn_metadata.query_start_loc[-num_prefills - 1 :]
@@ -41,8 +43,8 @@ class ShortConvAttentionMetadataBuilder(
             )
 
             nums_dict, batch_ptr, token_chunk_offset_ptr = (
-                compute_causal_conv1d_metadata(query_start_loc_p)
-            ) # Problem 2
+                compute_causal_conv1d_metadata(query_start_loc_p)  # Problem 2
+            )
 
         elif (
             num_decodes > 0
@@ -55,7 +57,7 @@ class ShortConvAttentionMetadataBuilder(
             state_indices_tensor = self.state_indices_tensor[:num_decode_tokens]
             state_indices_tensor[num_decodes:] = PAD_SLOT_ID
 
-        attn_metadata = ShortConvAttentionMetadata(
+        return ShortConvAttentionMetadata(
             query_start_loc=query_start_loc,
             state_indices_tensor=state_indices_tensor,
             has_initial_states_p=has_initial_states_p,
@@ -67,65 +69,17 @@ class ShortConvAttentionMetadataBuilder(
             batch_ptr=batch_ptr,
             token_chunk_offset_ptr=token_chunk_offset_ptr,
         )
-        return attn_metadata
 ```
 
+Both issues come from the same general rule:
 
+> If you want **full async scheduling**, be paranoid about **implicit CPU↔GPU sync** and about using **pageable host memory** for copies.
 
-## Problems 1
+---
 
-![has_inital_states_cpu_to](/img/has_inital_states_cpu_to.png)
+## Background: what is `has_initial_states_p` actually checking?
 
-``` python
-    class ShortConvAttentionMetadataBuilder:
-        def build(
-            common_prefix_len: int,
-            common_attn_metadata: CommonAttentionMetadata,
-            fast_build: bool = False,
-        ) -> ShortConvAttentionMetadata:
-            ...
-            if num_prefills > 0:
-                has_initial_states_cpu = (
-                    common_attn_metadata.num_computed_tokens_cpu[
-                        num_reqs - num_prefills : num_reqs
-                    ]
-                    > 0
-                ) # should be pinned
-                has_initial_states_p = has_initial_states_cpu.to(query_start_loc.device) # should turn on non_blocking copy
-            ...
-```
-
-The correct way
-```
-    has_inital_states_cpu = (...).pin_memory()
-    has_inital_states_p = has_initial_states_cpu.to(query_start_loc.device, non_blocking=True)
-```
-
-After this revision the `short_conv_attn: build: has_initial_states_cpu.to` is reduced only taking 28.367 μs. 
-
-But taking a closer look
-
-```
-    @property
-    @deprecated(
-        """
-    Prefer using device seq_lens directly to avoid implicit H<>D sync which breaks full
-    async scheduling. If a CPU copy is needed, it can be derived from 
-    query_start_loc_cpu and seq_lens.
-    Will be removed in a future release (v0.14.0)
-    """
-    )
-    def num_computed_tokens_cpu(self) -> torch.Tensor:
-        if self._num_computed_tokens_cpu is None:
-            query_seq_lens = (
-                self.query_start_loc_cpu[1:] - self.query_start_loc_cpu[:-1]
-            )
-            self._num_computed_tokens_cpu = self.seq_lens_cpu - query_seq_lens
-        return self._num_computed_tokens_cpu
-```
-
-Usually a sequence can be partitioned into the following view.
-
+During serving, a “sequence at iteration \(N\)” can be viewed like:
 
 ```
 |---------- N-1 iteration --------|
@@ -134,55 +88,121 @@ Usually a sequence can be partitioned into the following view.
 |---------- context_len ----------|
 |-------------------- seq_len ---------------------|
                                   |-- query_len ---|
-
 ```
 
-`has_inital_states_p` wants to determine whether we already has a inital state which is basically whether context_len > 0. Since `query_start_loc`
-and `seq_lens` are both device tensor, we don't ever need to move them. 
+`has_initial_states_p` is trying to determine whether we already have an *initial state* for short-conv attention, which is essentially checking:
 
-```
-    query_seq_lens = (
-        common_attn_metadata.query_start_loc[1:] - common_attn_metadata.query_start_loc[:-1]
+- **context_len > 0**  (i.e., this request is not “pure prompt from scratch”)
+
+In other words, it wants a per-request boolean derived from `query_start_loc` and `seq_lens`.
+
+---
+
+## Problem 1: “tiny” CPU→GPU copy that still breaks async
+
+Here is what I originally had:
+
+```python
+if num_prefills > 0:
+    has_initial_states_cpu = (
+        common_attn_metadata.num_computed_tokens_cpu[
+            num_reqs - num_prefills : num_reqs
+        ]
+        > 0
     )
-    # Compute context_lens on GPU
-    context_lens = common_attn_metadata.seq_lens - query_seq_lens
-    # Slice the prefill portion and check if > 0
-
-    has_initial_states_p = (
-        context_lens[num_reqs - num_prefills : num_reqs] > 0
-    )
+    has_initial_states_p = has_initial_states_cpu.to(query_start_loc.device)
 ```
 
-## Problem 2
+On the trace, this showed up as a noticeable sync/copy point:
+
+![has_initial_states_cpu_to](/img/has_inital_states_cpu_to.png)
+
+### Fix A: if you must H→D, use pinned memory + non-blocking
+
+If the value truly must originate on CPU, at minimum make the transfer async-friendly:
+
+```python
+has_initial_states_cpu = (...).pin_memory()
+has_initial_states_p = has_initial_states_cpu.to(
+    query_start_loc.device, non_blocking=True
+)
+```
+
+This dropped `short_conv_attn: build: has_initial_states_cpu.to` down to **~28.367 μs** in my run.
+
+### Fix B (better): don’t go to CPU in the first place
+
+The bigger “aha” was that `num_computed_tokens_cpu` is itself suspicious. In fact, in the codebase it is explicitly deprecated because it risks implicit sync:
+
+```python
+@property
+@deprecated(
+    """
+Prefer using device seq_lens directly to avoid implicit H<>D sync which breaks full
+async scheduling. If a CPU copy is needed, it can be derived from
+query_start_loc_cpu and seq_lens.
+Will be removed in a future release (v0.14.0)
+"""
+)
+def num_computed_tokens_cpu(self) -> torch.Tensor:
+    if self._num_computed_tokens_cpu is None:
+        query_seq_lens = self.query_start_loc_cpu[1:] - self.query_start_loc_cpu[:-1]
+        self._num_computed_tokens_cpu = self.seq_lens_cpu - query_seq_lens
+    return self._num_computed_tokens_cpu
+```
+
+But we don’t need any CPU tensor here. `query_start_loc` and `seq_lens` already exist on device, so compute the boolean on GPU:
+
+```python
+query_seq_lens = (
+    common_attn_metadata.query_start_loc[1:]
+    - common_attn_metadata.query_start_loc[:-1]
+)
+context_lens = common_attn_metadata.seq_lens - query_seq_lens
+
+has_initial_states_p = context_lens[num_reqs - num_prefills : num_reqs] > 0
+```
+
+This completely removes the host dependency for Problem 1.
+
+---
+
+## Problem 2: a 30 ms `cudaMemcpyAsync` that shouldn’t exist
+
+The next spike was much worse: a single `cudaMemcpyAsync` taking **~30.796 ms**.
 
 ![compute_causal_conv1d_metadata](/img/compute_causal_conv1d_metadata.png)
 
-This gigantic `cudaMemcpyAsync` takes 30.796 ms. When an cudaAPI call takes on the order of ms in stead of μs, there's something wrong.
+When a CUDA API call is in **milliseconds** (not microseconds), it usually means you accidentally introduced a synchronization point or forced a slow path.
+
+Zooming in, the GPU-side copy was:
+
+- `Memcpy DtoH (Pageable)` on the **main compute stream**
 
 ![compute_causal_conv1d_metadata_relationship](/img/compute_causal_conv1d_metadata_relationship.png)
 
-If you zoom in and look at the corrresponding memory operation on GPU, you see its `Memcpy DtoH (Pageable)`. There're two things that are immediately alarming. 
+Two red flags:
 
-First, it's an `DtoH` copy on the main compute stream. It will block cpu from dispatching later kernels until the current Memcpy operation is done.
+- **DtoH on the main stream**: it blocks the CPU from enqueuing later kernels until the copy completes (because the runtime must ensure the source is ready).
+- **Pageable host memory**: true async DMA requires pinned memory. With pageable memory, CUDA often has to:
+  - allocate/reuse an internal pinned staging buffer
+  - synchronize to ensure the device source is ready
+  - DMA into pinned memory
+  - memcpy pinned → pageable on CPU
 
-Second, it's `Pageable`. Because pageable host memory cannot be the target of true async DMA. CUDA has to do something like:
-	1.	allocate / reuse an internal pinned staging buffer
-	2.	ensure the source data is ready (often requires sync with prior GPU work on that stream)
-	3.	do the DMA into pinned memory
-	4.	copy from pinned → pageable (CPU memcpy), then return
-These are expensive operations. 
+### Root cause
 
-Looking at the source code.
+The culprit was inside `compute_causal_conv1d_metadata`:
 
-``` python
+```python
 def compute_causal_conv1d_metadata(query_start_loc_p: torch.Tensor):
     # Needed for causal_conv1d
-    seqlens = query_start_loc_p.diff().to("cpu") # !DtoH copy without pinned memory
-    nums_dict = {}  
+    seqlens = query_start_loc_p.diff().to("cpu")  # DtoH copy to pageable memory
+    nums_dict = {}
     batch_ptr = None
     token_chunk_offset_ptr = None
     device = query_start_loc_p.device
-    for BLOCK_M in [8]:  
+    for BLOCK_M in [8]:
         nums = -(-seqlens // BLOCK_M)
         nums_dict[BLOCK_M] = {}
         nums_dict[BLOCK_M]["nums"] = nums
@@ -192,14 +212,13 @@ def compute_causal_conv1d_metadata(query_start_loc_p: torch.Tensor):
         mlist_len = len(nums_dict[BLOCK_M]["mlist"])
         nums_dict[BLOCK_M]["mlist_len"] = mlist_len
         MAX_NUM_PROGRAMS = max(1024, mlist_len) * 2
-        offsetlist = []  # type: ignore
+        offsetlist = []
         for idx, num in enumerate(nums):
             offsetlist.extend(range(num))
         offsetlist = torch.tensor(offsetlist, dtype=torch.int32)
         nums_dict[BLOCK_M]["offsetlist"] = offsetlist
 
         if batch_ptr is None:
-            # Update default value after class definition
             batch_ptr = torch.full(
                 (MAX_NUM_PROGRAMS,), PAD_SLOT_ID, dtype=torch.int32, device=device
             )
@@ -209,33 +228,50 @@ def compute_causal_conv1d_metadata(query_start_loc_p: torch.Tensor):
         else:
             if batch_ptr.nelement() < MAX_NUM_PROGRAMS:
                 batch_ptr.resize_(MAX_NUM_PROGRAMS).fill_(PAD_SLOT_ID)
-                token_chunk_offset_ptr.resize_(  
-                    MAX_NUM_PROGRAMS
-                ).fill_(PAD_SLOT_ID)
+                token_chunk_offset_ptr.resize_(MAX_NUM_PROGRAMS).fill_(PAD_SLOT_ID)
 
-        batch_ptr[0:mlist_len].copy_(mlist) # !HtoD copy without pinned memory
-        token_chunk_offset_ptr[  
-            0:mlist_len
-        ].copy_(offsetlist) # !HtoD copy without pinned memory
+        batch_ptr[0:mlist_len].copy_(mlist)                 # HtoD from pageable
+        token_chunk_offset_ptr[0:mlist_len].copy_(offsetlist)  # HtoD from pageable
         nums_dict[BLOCK_M]["batch_ptr"] = batch_ptr
-        nums_dict[BLOCK_M]["token_chunk_offset_ptr"] = token_chunk_offset_ptr 
+        nums_dict[BLOCK_M]["token_chunk_offset_ptr"] = token_chunk_offset_ptr
 
     return nums_dict, batch_ptr, token_chunk_offset_ptr
 ```
 
-The first thing is always ask whether movement of data is necessary.
+There are *three* expensive transfers here:
 
-Actually the input could be a cpu tensor.
+- **DtoH**: `query_start_loc_p.diff().to("cpu")`
+- **HtoD**: `batch_ptr.copy_(mlist)`
+- **HtoD**: `token_chunk_offset_ptr.copy_(offsetlist)`
 
-``` python
-def compute_causal_conv1d_metadata(query_start_loc_cpu: torch.Tensor, device: torch.device)
+### Fix: keep the input CPU-side, and make HtoD transfers pinned + non-blocking
+
+First principle: ask if the movement is necessary.
+
+In this case, `compute_causal_conv1d_metadata` is building **CPU-side lists** anyway; it can just take CPU input and avoid the DtoH entirely:
+
+```python
+def compute_causal_conv1d_metadata(query_start_loc_cpu: torch.Tensor, device: torch.device):
+    ...
 ```
 
-This solved the DtoH copy.
+Then for the remaining HtoD copies:
 
-For those HtoD copy, we can just do `cpu_tensor.pin_memory()` and change `copy_(cpu_tensor)` to `copy_(cpu_tensor, non_blocking=True)`. These changes ensure
-the HtoD memcpy don't block the cpu and we dispatch asynchronously.
+- allocate the CPU tensors in **pinned memory** (`pin_memory()`)
+- use **non-blocking** copies (`copy_(..., non_blocking=True)`)
+
+After these changes, the trace looked like this:
 
 ![fixed_compute_causal_conv1d_metadata.png](/img/fixed_compute_causal_conv1d_metadata.png)
 
-In this graph, after the fix, the `compute_causal_conv1d_metadata` now takes only 292.806 μs and the async memcpy as indicated by the red arrow now takes a negliable amount of time. 
+And `compute_causal_conv1d_metadata` dropped to **~292.806 μs**, with the async memcpy (red arrow) becoming negligible.
+
+---
+
+## Takeaways
+
+- **Prefer device-side derivations** when you already have device tensors (`seq_lens`, `query_start_loc`). Avoid “convenience” CPU properties that hide sync.
+- If you must transfer CPU↔GPU in the hot path:
+  - use **pinned memory** (`pin_memory()`)
+  - use **non-blocking** transfers (`to(..., non_blocking=True)` / `copy_(..., non_blocking=True)`)
+- A `cudaMemcpyAsync` taking **milliseconds** is often a sign you triggered a sync or a pageable-memory slow path. Always check whether it’s `DtoH (Pageable)` / `HtoD (Pageable)` and on which stream it runs.
