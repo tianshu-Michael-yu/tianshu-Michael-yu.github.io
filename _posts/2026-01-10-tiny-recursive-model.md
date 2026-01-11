@@ -365,6 +365,9 @@ This distinction helps explain why TRM is particularly effective in low-data, al
 
 TRM achieves strong generalization with orders-of-magnitude fewer parameters than LLMs:
 
+![ARC-AGI-1](/img/arc-agi-1.png)
+![ARC-AGI-2](/img/arc-agi-2-trm.png)
+
 - **87%** on Sudoku-Extreme
 - **85%** on Maze-Hard
 - **44.6%** on ARC-AGI-1
