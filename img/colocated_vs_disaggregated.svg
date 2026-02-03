@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 350">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1976D2"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="350" fill="#fafafa"/>
+
+  <!-- Title -->
+  <text x="400" y="30" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#333">Colocated vs Disaggregated Architecture</text>
+
+  <!-- ========== COLOCATED SECTION ========== -->
+  <text x="190" y="60" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333">Colocated (HybridEngine)</text>
+
+  <!-- GPU Box -->
+  <rect x="70" y="75" width="240" height="180" fill="white" stroke="#333" stroke-width="2" rx="8"/>
+  <text x="190" y="95" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#333">Shared GPU Pool</text>
+
+  <!-- Time slice 1: Generation active -->
+  <rect x="85" y="110" width="100" height="55" fill="#4CAF50" rx="5"/>
+  <text x="135" y="135" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="white" font-weight="bold">Generation</text>
+  <text x="135" y="150" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">Active</text>
+
+  <rect x="195" y="110" width="100" height="55" fill="#E0E0E0" rx="5" stroke="#999" stroke-dasharray="3,2"/>
+  <text x="245" y="135" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666" font-weight="bold">Training</text>
+  <text x="245" y="150" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#666">Offloaded</text>
+
+  <!-- Arrow between states -->
+  <path d="M 190 195 L 190 210" stroke="#666" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Time slice 2: Training active -->
+  <rect x="85" y="215" width="100" height="30" fill="#E0E0E0" rx="5" stroke="#999" stroke-dasharray="3,2"/>
+  <text x="135" y="235" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#666">Offloaded</text>
+
+  <rect x="195" y="215" width="100" height="30" fill="#2196F3" rx="5"/>
+  <text x="245" y="235" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="white">Active</text>
+
+  <!-- CPU offload annotation -->
+  <rect x="320" y="130" width="50" height="30" fill="#FFF3E0" stroke="#FF9800" rx="3"/>
+  <text x="345" y="150" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#E65100">CPU</text>
+  <path d="M 295 137 L 318 143" stroke="#FF9800" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- Colocated annotation -->
+  <text x="190" y="275" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#666">Time-multiplexed: only one active at a time</text>
+  <text x="190" y="290" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#4CAF50">✓ Fast weight sync (in-memory NCCL)</text>
+  <text x="190" y="305" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#F44336">✗ No overlap, idle during switch</text>
+
+  <!-- ========== DISAGGREGATED SECTION ========== -->
+  <text x="610" y="60" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333">Disaggregated</text>
+
+  <!-- Generation Pool -->
+  <rect x="450" y="75" width="130" height="100" fill="white" stroke="#4CAF50" stroke-width="2" rx="8"/>
+  <text x="515" y="95" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#333">Generator Pool</text>
+  <rect x="465" y="105" width="45" height="25" fill="#4CAF50" rx="3"/>
+  <rect x="520" y="105" width="45" height="25" fill="#4CAF50" rx="3"/>
+  <rect x="465" y="138" width="45" height="25" fill="#4CAF50" rx="3"/>
+  <rect x="520" y="138" width="45" height="25" fill="#81C784" rx="3"/>
+  <text x="487" y="122" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="white">GPU</text>
+  <text x="542" y="122" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="white">GPU</text>
+  <text x="487" y="155" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="white">GPU</text>
+  <text x="542" y="155" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="white">GPU</text>
+
+  <!-- Training Pool -->
+  <rect x="650" y="75" width="130" height="100" fill="white" stroke="#2196F3" stroke-width="2" rx="8"/>
+  <text x="715" y="95" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#333">Trainer Pool</text>
+  <rect x="665" y="105" width="45" height="25" fill="#2196F3" rx="3"/>
+  <rect x="720" y="105" width="45" height="25" fill="#2196F3" rx="3"/>
+  <rect x="665" y="138" width="45" height="25" fill="#2196F3" rx="3"/>
+  <rect x="720" y="138" width="45" height="25" fill="#64B5F6" rx="3"/>
+  <text x="687" y="122" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="white">GPU</text>
+  <text x="742" y="122" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="white">GPU</text>
+  <text x="687" y="155" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="white">GPU</text>
+  <text x="742" y="155" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="white">GPU</text>
+
+  <!-- Queue between them -->
+  <rect x="585" y="100" width="60" height="70" fill="#FFF8E1" stroke="#FFC107" stroke-width="2" rx="5"/>
+  <text x="615" y="120" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#F57C00">Queue</text>
+  <rect x="593" y="128" width="44" height="10" fill="#FFECB3" stroke="#FFB300" rx="2"/>
+  <rect x="593" y="142" width="44" height="10" fill="#FFECB3" stroke="#FFB300" rx="2"/>
+  <rect x="593" y="156" width="44" height="10" fill="#FFECB3" stroke="#FFB300" rx="2"/>
+
+  <!-- Arrows -->
+  <path d="M 580 135 L 587 135" stroke="#4CAF50" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 643 135 L 650 135" stroke="#2196F3" stroke-width="2" marker-end="url(#arrow-blue)"/>
+
+  <!-- Weight sync arrow -->
+  <path d="M 715 175 Q 715 210 615 210 Q 515 210 515 175" stroke="#9C27B0" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arrow)"/>
+  <text x="615" y="225" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#7B1FA2">Weight Sync</text>
+
+  <!-- Disaggregated annotation -->
+  <text x="610" y="260" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#666">Both run continuously in parallel</text>
+  <text x="610" y="275" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#4CAF50">✓ Full overlap, no idle time</text>
+  <text x="610" y="290" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#4CAF50">✓ Elastic scaling, fault tolerance</text>
+  <text x="610" y="305" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#F44336">✗ Network transfer overhead</text>
+</svg>

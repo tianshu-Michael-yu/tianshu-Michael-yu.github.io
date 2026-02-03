@@ -10,6 +10,10 @@ Synchronous RL waits for every sample in a batch to finish generating before tra
 
 The issue compounds with longer contexts and agentic tasks. A model interacting with a code sandbox or web browser might wait seconds for environment feedback, and those waits are unpredictable. Simply adding more GPUs does not help—you cannot parallelize away the tail of a single slow trajectory.
 
+![Sync vs Async Rollout](/img/sync_vs_async_rollout.svg)
+
+The diagram above contrasts the two approaches. In synchronous mode, fast-finishing samples create idle bubbles while waiting for stragglers. A single long-tail sample blocks the entire batch from proceeding to training. In asynchronous mode, samples stream to the trainer as they complete, and training runs continuously without waiting.
+
 ## Colocated vs. Disaggregated
 
 Verl supports two deployment modes that make different trade-offs between latency and utilization.
@@ -17,6 +21,10 @@ Verl supports two deployment modes that make different trade-offs between latenc
 **Colocated (HybridEngine).** Training and generation share the same GPU pool. When generation runs, the optimizer states offload to CPU; when training runs, the inference engine pauses. Weight synchronization is fast—just an in-memory NCCL transfer—but the two workloads cannot overlap. This mode works well when generation is predictable and roughly matches training time.
 
 **Disaggregated.** Generation and training run on separate node pools connected by queues. The generator streams samples to the trainer as they complete, so slow trajectories no longer block fast ones. The cost is network transfer for weights and samples, but the benefit is that both pools stay busy. Disaggregation also enables elastic scaling: you can add generator nodes during high-variance workloads without touching the trainer.
+
+![Colocated vs Disaggregated](/img/colocated_vs_disaggregated.svg)
+
+The colocated design time-multiplexes GPUs between generation and training, offloading inactive states to CPU. The disaggregated design runs both workloads in parallel on dedicated pools, communicating through a sample queue with periodic weight synchronization.
 
 ## Staleness and Off-Policy Drift
 
@@ -29,6 +37,10 @@ N_{\text{rollout}} = (1 + \eta) \cdot B - N_{\text{stale}}
 $$
 
 samples between weight syncs, where $B$ is the batch size and $N_{\text{stale}}$ counts leftover stale samples from the previous round. When generation is fast relative to training, $\eta = 1$ approximates one-step off-policy updates.
+
+![Staleness and IS Correction](/img/staleness_is_correction.svg)
+
+The diagram shows how samples generated under different policy versions end up in the same training batch. Sample A (generated at version $k$) is stale by 2 versions when used for training at $\pi_{\text{old}}$. Sample C is fresh. The importance sampling ratio $\rho_t$ reweights each sample's contribution based on how much the policy has drifted since generation.
 
 ## Importance Sampling Corrections
 

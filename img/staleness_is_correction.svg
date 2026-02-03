@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 380">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+    <marker id="arr-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7B1FA2"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="380" fill="#fafafa"/>
+
+  <!-- Title -->
+  <text x="400" y="28" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#333">Staleness and Importance Sampling Correction</text>
+
+  <!-- Timeline labels -->
+  <text x="50" y="70" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#333">Policy Version</text>
+
+  <!-- Policy version boxes on timeline -->
+  <rect x="120" y="55" width="60" height="25" fill="#E3F2FD" stroke="#1976D2" stroke-width="2" rx="4"/>
+  <text x="150" y="72" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#1976D2" font-weight="bold">π(k)</text>
+
+  <rect x="260" y="55" width="60" height="25" fill="#E3F2FD" stroke="#1976D2" stroke-width="2" rx="4"/>
+  <text x="290" y="72" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#1976D2" font-weight="bold">π(k+1)</text>
+
+  <rect x="400" y="55" width="60" height="25" fill="#E3F2FD" stroke="#1976D2" stroke-width="2" rx="4"/>
+  <text x="430" y="72" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#1976D2" font-weight="bold">π(k+2)</text>
+
+  <rect x="540" y="55" width="60" height="25" fill="#E8F5E9" stroke="#388E3C" stroke-width="2" rx="4"/>
+  <text x="570" y="72" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#388E3C" font-weight="bold">π_old</text>
+
+  <!-- Arrow timeline -->
+  <line x1="100" y1="67" x2="700" y2="67" stroke="#ccc" stroke-width="2"/>
+  <path d="M 180 67 L 260 67" stroke="#666" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M 320 67 L 400 67" stroke="#666" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M 460 67 L 540 67" stroke="#666" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M 600 67 L 680 67" stroke="#666" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="700" y="72" font-family="Arial, sans-serif" font-size="10" fill="#666">time</text>
+
+  <!-- Samples section -->
+  <text x="50" y="115" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#333">Samples</text>
+
+  <!-- Sample A - generated at k, used at k+2 (stale=2) -->
+  <rect x="140" y="100" width="50" height="30" fill="#FFCDD2" stroke="#E53935" stroke-width="2" rx="4"/>
+  <text x="165" y="120" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#C62828" font-weight="bold">A</text>
+  <path d="M 165 130 Q 165 160 430 160 Q 570 160 570 135" stroke="#E53935" stroke-width="1.5" fill="none" stroke-dasharray="4,2" marker-end="url(#arr)"/>
+  <text x="350" y="175" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#C62828">staleness = 2</text>
+
+  <!-- Sample B - generated at k+1, used at k+2 (stale=1) -->
+  <rect x="280" y="100" width="50" height="30" fill="#FFF9C4" stroke="#F9A825" stroke-width="2" rx="4"/>
+  <text x="305" y="120" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#F57F17" font-weight="bold">B</text>
+  <path d="M 305 130 Q 305 145 430 145 Q 555 145 555 135" stroke="#F9A825" stroke-width="1.5" fill="none" stroke-dasharray="4,2" marker-end="url(#arr)"/>
+  <text x="430" y="152" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#F57F17">staleness = 1</text>
+
+  <!-- Sample C - generated at k+2, used at k+2 (fresh) -->
+  <rect x="420" y="100" width="50" height="30" fill="#C8E6C9" stroke="#43A047" stroke-width="2" rx="4"/>
+  <text x="445" y="120" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#2E7D32" font-weight="bold">C</text>
+  <path d="M 445 130 L 545 130" stroke="#43A047" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+  <text x="495" y="125" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#2E7D32">fresh</text>
+
+  <!-- Training batch box -->
+  <rect x="540" y="95" width="70" height="45" fill="#E8F5E9" stroke="#388E3C" stroke-width="2" rx="5"/>
+  <text x="575" y="115" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#2E7D32">Training</text>
+  <text x="575" y="130" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#2E7D32">Batch</text>
+
+  <!-- IS Correction section -->
+  <rect x="50" y="200" width="700" height="160" fill="white" stroke="#E0E0E0" stroke-width="1" rx="8"/>
+  <text x="400" y="225" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333">Importance Sampling Correction</text>
+
+  <!-- Formula box -->
+  <rect x="80" y="240" width="280" height="50" fill="#F3E5F5" stroke="#9C27B0" stroke-width="1" rx="5"/>
+  <text x="220" y="260" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#6A1B9A">Per-token IS ratio:</text>
+  <text x="220" y="280" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4A148C" font-weight="bold">ρₜ = π_old(aₜ|sₜ) / π_rollout(aₜ|sₜ)</text>
+
+  <!-- Token-TIS box -->
+  <rect x="80" y="300" width="190" height="50" fill="#E8F5E9" stroke="#4CAF50" stroke-width="1" rx="5"/>
+  <text x="175" y="318" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#2E7D32">Token-TIS</text>
+  <text x="175" y="335" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#388E3C">wₜ = min(ρₜ, C)</text>
+  <text x="175" y="347" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#666">Low variance, some bias</text>
+
+  <!-- Seq-TIS box -->
+  <rect x="290" y="300" width="190" height="50" fill="#E3F2FD" stroke="#2196F3" stroke-width="1" rx="5"/>
+  <text x="385" y="318" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#1565C0">Seq-TIS</text>
+  <text x="385" y="335" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#1976D2">w_seq = min(∏ρₜ, C)</text>
+  <text x="385" y="347" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#666">Unbiased, high variance</text>
+
+  <!-- Drift level guide -->
+  <rect x="500" y="240" width="230" height="110" fill="#FFF8E1" stroke="#FFC107" stroke-width="1" rx="5"/>
+  <text x="615" y="260" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#F57C00">When to use which?</text>
+  <text x="515" y="282" font-family="Arial, sans-serif" font-size="10" fill="#666">• Negligible drift → bypass</text>
+  <text x="515" y="300" font-family="Arial, sans-serif" font-size="10" fill="#666">• Moderate drift → Token-TIS</text>
+  <text x="515" y="318" font-family="Arial, sans-serif" font-size="10" fill="#666">• Severe drift → Seq-TIS</text>
+  <text x="515" y="336" font-family="Arial, sans-serif" font-size="10" fill="#666">• Toxic tail → Seq-MIS (reject)</text>
+</svg>
