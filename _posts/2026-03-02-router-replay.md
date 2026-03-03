@@ -39,6 +39,16 @@ This discrepancy has two sources:
 
 The result is that the probabilities the training engine computes for tokens are *different* from the probabilities that actually generated those tokens during rollout. And this mismatch is not small — the paper shows that it can cause dramatically divergent token probability ratios, with many tokens exhibiting extreme probability discrepancies between the two phases.
 
+We can quantify how much of this KL divergence comes from routing specifically by comparing dense and MoE models on the same FSDP2 + vLLM stack:
+
+| Model | Baseline KL | With R3 | Interpretation |
+|---|---|---|---|
+| LFM 1.2B Dense | ~0.003 | — | Framework noise floor |
+| LFM MoE 8B | ~0.01–0.02 | ~0.004–0.007 | R3 brings MoE down toward dense floor |
+| Qwen 30B MoE | ~0.003–0.004 | ~0.001 | Baseline already near dense floor |
+
+The dense model establishes a **framework noise floor** (~0.003 nats) — irreducible KL from numerical differences between FSDP2 and vLLM unrelated to routing. LFM MoE 8B sits 3–6x above this floor, confirming the excess KL comes from routing disagreements. Interestingly, Qwen 30B MoE's baseline KL is already near the dense floor, suggesting its routing is more deterministic across frameworks — R3's benefit is model-dependent.
+
 ---
 
 ## Why This Breaks RL Training
@@ -49,7 +59,26 @@ In practice, RL algorithms clip this ratio (typically in the range [0.8, 1.2] or
 
 Here's the problem: in MoE models, the routing mismatch can push these importance sampling ratios to extreme values *before any learning even happens*, just from the discrepancy between the inference and training routers. From the algorithm's perspective, it looks like the model has already changed dramatically from the rollout policy — so either the gradients get clipped into meaninglessness, or (if clipping isn't aggressive enough) the training is hit with enormous, destabilizing updates.
 
-The paper documents exactly this: training MoE models with RL using standard methods like GRPO leads to measurable increases in KL divergence between the rollout policy and the training policy, with many tokens showing probability ratios that would trigger extreme clipping behavior. In severe cases, this leads to **catastrophic training collapse** — the model essentially falls apart mid-training.
+This effect is especially dangerous with **multi mini-step training** — where you take multiple gradient steps per rollout batch (`ppo_mini_batch_size < train_batch_size`). Each mini-step shifts the policy further from the rollout distribution, and routing errors compound on top of that drift. We trained an LFM MoE 8B model on multi-turn GSM8K with 4 mini-steps per rollout, and the KL divergence between rollout and training tells the story clearly:
+
+![Rollout KL comparison — baseline vs R3](/img/rollout_corr_kl_lfm_moe_baseline_vs_r3_comparison.png)
+*Baseline KL fluctuates at 0.008–0.015 with spikes to 0.02; R3 holds steady at 0.003–0.005.*
+
+In severe cases, this leads to **catastrophic training collapse**. Running the same configuration to 3,000 steps, the baseline enters a feedback loop — routing errors produce incorrect gradients, which destabilize weights, which cause even worse routing, which produces even larger errors — until the model irreversibly degenerates:
+
+![3k steps grad norm — baseline explodes](/img/lfm_moe_3k_steps_grad_norm_compr.png)
+*Baseline gradient norms begin spiking around step 2k and explode to 4000+ by step 2.5k. R3 remains flat near zero throughout.*
+
+![3k steps KL — baseline breakdown](/img/lfm_moe_3k_steps_rollout_corr_kl_compr.png)
+*Baseline `rollout_corr/kl` explodes to 30+ nats — a complete breakdown in logprob agreement between rollout and training. R3 stays near zero.*
+
+![3k steps validation — baseline drops to zero](/img/lfm_moe_3k_steps_validation_compr.png)
+*Baseline validation accuracy drops from ~0.89 to 0.0 after step 2.5k. R3 holds steady at ~0.90.*
+
+![3k steps score mean — baseline collapses](/img/lfm_moe_3k_steps_score_mean_compr.png)
+*The model can no longer produce correct answers. R3 maintains ~1.0 score mean.*
+
+**The key trigger is multi mini-step training**, not multi-turn prompting. Single mini-step runs on the same model and task converge fine without R3 — the importance ratio stays near 1.0 regardless of routing noise, so the small KL perturbation from routing never reaches the clipping boundary.
 
 ---
 
@@ -75,17 +104,25 @@ Concretely, during the rollout phase, for every token in every generated sequenc
 
 When the training phase begins, instead of letting the training engine's router make fresh decisions, R3 feeds those recorded routing masks back in directly. The training engine uses the *same expert activations* that the inference engine used. This means the log-probabilities computed during training reflect the same computational path that actually produced the tokens — so the importance sampling ratios are accurate, the gradients are meaningful, and training is stable.
 
-The beauty of R3 is that it's minimal. It doesn't change the model architecture. It doesn't require new RL algorithms. It doesn't impose any restrictive constraints on the training objective. It just adds a thin logging layer during rollout and a replay mechanism during the training forward pass.
+The beauty of R3 is that it's minimal. It doesn't change the model architecture. It doesn't require new RL algorithms. It doesn't impose any restrictive constraints on the training objective. It just adds a thin logging layer during rollout and a replay mechanism during the training forward pass. And it adds minimal overhead — the routing masks are small relative to the token data, and replaying them adds negligible latency to the training forward pass.
 
-The results are striking. The paper shows that R3:
+### How Much to Replay: Indices vs. Indices + Weights
 
-- Significantly reduces the KL divergence between training and inference policy distributions
-- Reduces the number of tokens with extreme probability discrepancies by roughly an order of magnitude
-- Prevents RL training collapse that occurs with standard methods
-- Outperforms both GSPO and TIS on downstream task performance
-- Does all of this **without compromising training speed**
+There's a practical design question in implementing R3: should you replay just the **routing indices** (which experts were selected) or also the **combination weights** (the softmax scores used to mix expert outputs)?
 
-That last point matters. A fix that stabilizes training but cuts throughput in half is hard to adopt in practice. R3 adds minimal overhead — the routing masks are small relative to the token data, and replaying them adds negligible latency to the training forward pass.
+The original R3 paper describes replaying the full routing distribution. But VeRL's standard implementation only replays indices, letting the training engine recompute the combination weights. We tested both variants on LFM MoE 8B:
+
+![Indices vs indices+weights KL comparison](/img/with_rollout_weight_r3_vs_baseline.png)
+
+| Variant | rollout_corr/kl |
+|---|---|
+| Baseline (no replay) | ~0.01–0.02 |
+| Indices only | ~0.006–0.010 |
+| Indices + weights | ~0.004–0.007 |
+
+Replaying weights provides additional KL reduction — it eliminates one more source of numerical disagreement between the two forward passes. However, there's a **staleness tradeoff**: indices-only lets the updated model recompute its own combination weights, preserving its current judgment about how to weight experts. Indices + weights forces the model to use stale interpolation coefficients from the rollout policy. The storage overhead is also higher (float tensors vs. integer tensors).
+
+For most practical purposes, **indices-only replay captures the bulk of R3's benefit** while keeping the implementation simple.
 
 ---
 
