@@ -42,21 +42,23 @@ $$
 
 where $\sigma(\mathbf{z}^T)$ and $\sigma(\mathbf{z}^S)$ are the softmax distributions of the teacher and student logits respectively, and $k$ ranges over the vocabulary. This loss is computed only over masked response positions, meaning the student is trained to match the teacher's full predictive distribution — not just the argmax — on the tokens that matter for downstream performance.
 
-### Visual-Token Distillation
+### Visual-Position Distillation
 
-After the vision encoder and connector project the image into visual tokens, these tokens occupy specific positions in the combined sequence. MDist also applies KL divergence on the LLM's output logits at these visual token positions:
+A clarification on terminology is useful here. "Visual tokens" are not part of the text vocabulary — they are continuous embeddings produced by the vision encoder and projected into the LLM's embedding space by the connector. The LLM cannot sample or output a visual token. At every sequence position, including positions occupied by visual embeddings, the LLM produces logits over the standard text vocabulary. During normal training these positions are masked ($-100$) and do not contribute to the cross-entropy loss.
+
+However, the teacher's text-vocabulary logits at visual positions still encode useful information about how the teacher processes visual inputs internally. MDist exploits this by applying KL divergence on the LLM's output logits at these positions:
 
 $$
 \mathcal{L}_{\text{vis}} = D_{\text{KL}}\!\left( \sigma(\mathbf{z}^T_{\text{img}}) \;\|\; \sigma(\mathbf{z}^S_{\text{img}}) \right)
 $$
 
-where $\mathbf{z}^T_{\text{img}}$ and $\mathbf{z}^S_{\text{img}}$ are the teacher's and student's logits at the 728 visual token positions (corresponding to the SigLIP output patches). This encourages the student's language model to develop similar internal representations when processing visual information, even at positions where no text supervision exists.
+where $\mathbf{z}^T_{\text{img}}$ and $\mathbf{z}^S_{\text{img}}$ are the teacher's and student's text-vocabulary logits at the 728 sequence positions corresponding to the SigLIP output patches. This encourages the student's language model to develop similar internal processing patterns for visual information, even at positions where no ground-truth text supervision exists.
 
 ## Relation Distillation (RDist)
 
-RDist captures a different kind of knowledge: the structural relationships among visual tokens. Rather than aligning individual token distributions, it aligns the pairwise interaction pattern across all visual positions.
+RDist captures a different kind of knowledge: the structural relationships among visual positions. Rather than aligning individual output distributions, it aligns the pairwise interaction pattern across all positions occupied by visual embeddings.
 
-Given the teacher's logits at visual positions $\mathbf{Z}^T_{\text{img}} \in \mathbb{R}^{N_v \times V}$ and the student's $\mathbf{Z}^S_{\text{img}} \in \mathbb{R}^{N_v \times V}$ (where $N_v = 728$ is the number of visual tokens and $V$ is the vocabulary size), the relation matrices are:
+Given the teacher's text-vocabulary logits at the visual positions $\mathbf{Z}^T_{\text{img}} \in \mathbb{R}^{N_v \times V}$ and the student's $\mathbf{Z}^S_{\text{img}} \in \mathbb{R}^{N_v \times V}$ (where $N_v = 728$ is the number of visual positions and $V$ is the vocabulary size), the relation matrices are:
 
 $$
 \mathbf{R}^T = \mathbf{Z}^T_{\text{img}} (\mathbf{Z}^T_{\text{img}})^\top, \qquad \mathbf{R}^S = \mathbf{Z}^S_{\text{img}} (\mathbf{Z}^S_{\text{img}})^\top
