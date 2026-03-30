@@ -78,7 +78,7 @@ $$
 \mathcal{L} = \mathcal{L}_{\text{CE}} + \mathcal{L}_{\text{resp}} + \mathcal{L}_{\text{vis}} + \mathcal{L}_{\text{rela}}
 $$
 
-where $\mathcal{L}_{\text{CE}}$ is the standard autoregressive cross-entropy loss. For text-only samples (no image), only $\mathcal{L}_{\text{CE}} + \mathcal{L}_{\text{resp}}$ is used, since there are no visual tokens to distill.
+where $$\mathcal{L}_{\text{CE}}$$ is the standard autoregressive cross-entropy loss. For text-only samples (no image), only $$\mathcal{L}_{\text{CE}} + \mathcal{L}_{\text{resp}}$$ is used, since there are no visual tokens to distill.
 
 ## The Shared Tokenizer Assumption
 
