@@ -102,6 +102,118 @@ PHI-S is the unsexy load-bearing piece of multi-teacher distillation: not glamor
 
 The thing that bites people is **target collapse at the head**. The student looks great on the distillation loss, the heads' cosine-with-teacher numbers approach 0.95, and downstream metrics are still mediocre. What's happening: the heads have absorbed all the per-teacher idiosyncrasy and the trunk is producing a generic feature that's *easy to project* but doesn't actually carry teacher-specific structure. You only see this if you evaluate the **trunk** directly, with frozen features and no head — which is exactly what the evaluation section below is built around.
 
+## Optimizer geometry: choosing Muon, and what it actually does
+
+Most distillation recipes default to AdamW out of habit. The optimizer choice meaningfully changes what the trunk learns, though, and once you understand the geometry, Muon turns out to be a clean fit for the two-loss, multi-teacher setting we've been describing. The next few subsections are the why; the practical recipe lives at the bottom for skimmers.
+
+### Optimizers as choices of norm
+
+Every gradient-based optimizer can be characterized as steepest descent under some norm constraint. Pick a norm $\|\cdot\|$, define your update as
+
+$$\Delta W \;=\; \arg\max_{\|\Delta\|\,\le\,1}\;\langle -\nabla L,\;\Delta\rangle,$$
+
+and the optimizer's behavior falls out. The inner product is the first-order predicted decrease in loss; the constraint sets the "budget" the parameter is allowed to move per step (the learning rate $\eta$ scales the answer back to whatever step size you want). All of an optimizer's personality lives in the choice of norm, because the norm determines the shape of the unit ball and therefore the shape of the maximizer.
+
+Under a Frobenius ball you get vanilla SGD's direction. Under an $\ell_\infty$ ball on entries you get sign-SGD. Under a *coordinate-wise weighted* $\ell_\infty$ ball — entries normalized by a running second-moment estimate $\sqrt{\hat v}$ — you get the (approximate) AdamW step:
+
+$$\Delta W_{ij} \;\approx\; \frac{-\hat m_{ij}}{\sqrt{\hat v_{ij}}}.$$
+
+The Muon paper calls this the "Max-of-Max norm": you cap each entry independently. The construction treats a weight *matrix* as a bag of scalars and gives each scalar its own adaptive step size. That's a perfectly reasonable thing to do for embeddings, biases, and RMSNorm scales — parameters that genuinely are bags of scalars. It is *not* a reasonable thing to do for weight matrices that act as linear operators on activations, which is what almost all the parameters in a ViT trunk are.
+
+### Spectral norm and the operator view
+
+The natural norm for a weight matrix isn't entry-wise; it's operator-wise. A weight matrix $W \in \mathbb{R}^{m\times n}$ sits inside the network as a linear map $x \mapsto Wx$. What matters for stability is how much $W$'s action on its input changes when you update it — the spectral norm of the change $\|\Delta W\|_2$, not its entry-wise magnitude. Two updates can have identical Frobenius norms but very different operator behavior: a rank-1 update concentrates its full Frobenius budget along one singular direction and produces a big spectral change there, while a rank-$n$ update spreads the same budget across many directions for a smaller per-direction change. The Frobenius budget doesn't see this; the spectral budget does.
+
+Concretely, the spectral norm of $A$ is its largest singular value:
+
+$$\|A\|_2 \;=\; \sigma_{\max}(A) \;=\; \max_{\|x\|_2 = 1}\|Ax\|_2 \;=\; \sqrt{\lambda_{\max}(A^\top A)}.$$
+
+In practice nobody computes a full SVD for this; a few iterations of power iteration on $A^\top A$ converge linearly at rate $(\sigma_2/\sigma_1)^2$, and spectral normalization in GANs uses one iteration per training step.
+
+A confusion worth flagging while we're here: "the L2 norm of a matrix" is ambiguous. Treated as a flattened vector, it's the Frobenius norm $\sqrt{\sum_{ij} A_{ij}^2}$. Treated as the operator norm induced by the L2 vector norm, it's the spectral norm. They coincide only for rank-1 matrices; in general $\|A\|_2 \le \|A\|_F \le \sqrt{r}\,\|A\|_2$ where $r$ is the rank. PyTorch's `grad_norm` (the number you log to wandb) is the Frobenius variety, applied to the entire flattened parameter vector — not the spectral norm of any individual matrix. Whenever this section says "spectral norm," it's the operator one.
+
+### Muon's update rule
+
+Muon's whole substance is one step: given the EMA of past gradients $M_t$, replace it with its orthogonalized version before applying as an update. If $M_t = U\Sigma V^\top$ is the SVD, the orthogonalized update is
+
+$$O_t \;=\; UV^\top.$$
+
+That throws away $\Sigma$ entirely and keeps only the directions. The result has all singular values equal to 1: a (semi-)orthogonal matrix, an isometry on its row/column space, spectral norm exactly 1. The original paper calls this the "isomorphic" property — used loosely to mean *uniform across directions* (iso-morph = equal-form), not in the strict algebraic sense of structure-preserving bijection.
+
+Mechanically, you never compute the SVD. Muon runs five iterations of a tuned quintic Newton-Schulz polynomial on the momentum matrix, which approximately pushes all singular values toward 1. The whole thing is matmuls — GPU-friendly, no expensive numerical linear algebra — and it works because the polynomial $p(x) = ax + bx^3 + cx^5$ with the right coefficients has a basin around $x \approx 1$ that's attractive for any input in $[0, \sigma_{\max}]$.
+
+The reason this is the right thing to do, in the variational-norm framing: $UV^\top$ is exactly the maximizer of $\langle -M_t, \Delta\rangle$ over the spectral-norm unit ball. So Muon is steepest descent under a spectral-norm constraint, by construction.
+
+### Why equalizing singular values is the right move (not the wrong one)
+
+The obvious objection: shouldn't directions with larger gradient signal get larger updates? Isn't squashing all singular values to 1 throwing away useful information about which way to learn fastest?
+
+The objection turns on what the singular values of $M_t$ actually mean. They don't represent "the most important features"; they represent the conditioning of the gradient flow itself. A direction can dominate the momentum spectrum because the parameter happens to sit at a large scale, because the loss surface is steep along it but the variable is already nearly optimal, because earlier layers' bad conditioning is leaking through, or simply because the gradient has been correlated along that direction for many steps and compounding has amplified it. None of those is "this is the right thing to learn faster."
+
+This is the same observation that motivates Adam vs. SGD. Adam normalizes per coordinate by the running variance because raw gradient magnitudes are not a reliable signal of update importance. Muon normalizes per singular direction by the singular value for the same reason, but at the matrix level rather than the scalar level. Both are saying: trust the direction more than the magnitude, because the magnitude is contaminated by stuff that has nothing to do with how fast you should be learning that direction.
+
+A useful framing: orthogonalization is *whitening* applied in the singular-vector basis of the momentum. Whitening doesn't claim that all features are equally important; it removes the spurious anisotropy introduced by the noise and correlation structure of the signal so that downstream learning sees a clean step. The Moonlight paper's SVD-entropy ablations confirm this empirically: trained networks under Muon end up with *more diverse* singular spectra in their weights, not less. The orthogonalization step prevents the optimizer from collapsing onto a few singular directions per step — over many steps, the network still allocates capacity to genuinely useful directions, but it does so through accumulated gradient signal in the right basis, not through a single dominant per-step direction.
+
+### Consistent Update RMS, and where the spectral-norm framing softens
+
+There's a complication. The orthogonalized update $UV^\top$ has spectral norm exactly 1, but its per-entry magnitude (its RMS) is shape-dependent. For a full-rank update on an $A \times B$ matrix,
+
+$$\text{RMS}(UV^\top) \;=\; \frac{\|UV^\top\|_F}{\sqrt{AB}} \;=\; \frac{1}{\sqrt{\max(A, B)}}.$$
+
+This is Lemma 1 of the MuonScalable / Moonlight paper. The proof drops out of the singular-value structure: $\|UV^\top\|_F^2 = \min(A, B)$ (one per nonzero singular value), divide by $AB$ and take the square root.
+
+The consequence at scale: a $4096 \times 4096$ MLP gets per-entry updates ~5.6× smaller than a $128 \times 128$ per-head projection under the same nominal step size. Big matrices under-train; small matrices over-train. Vanilla Muon scales badly to LLM-sized models for this reason, and the same problem shows up in encoder distillation as soon as you mix MHA, GQA, or MLA heads in the trunk.
+
+The "Consistent Update RMS" fix is to multiply by $\sqrt{\max(A, B)}$ and a small global constant tuned to match AdamW's empirical update RMS:
+
+$$\Delta W \;=\; \eta \cdot 0.2 \cdot O_t \cdot \sqrt{\max(A, B)}.$$
+
+After this rescaling, every matrix in the network — square, rectangular, big, small — gets per-entry updates of RMS ≈ 0.2, which lands inside AdamW's empirical 0.2–0.4 range. The payoff is hyperparameter transfer: you can use the same `lr` and `weight_decay` you tuned for AdamW, and you can mix Muon (for 2D weights) and AdamW (for everything else) without retuning each group.
+
+It's worth being honest about what this trades away. The pure spectral-norm-budget story says every layer's update should have $\|\Delta W\|_2 = \eta$ — one operator-scale step size network-wide. After the $\sqrt{\max(A,B)}$ rescaling, the spectral norm of the applied update is $0.2\eta\sqrt{\max(A,B)}$, which is layer-dependent. You can read this two ways: (i) as a *per-layer learning rate* $\tilde\eta_l \propto \sqrt{\max(A_l, B_l)}$ inside the spectral-norm framework, which is perfectly legal and doesn't change how direction is chosen; (ii) as a *concession from spectral to entry-wise budgeting* — Muon picks step directions with spectral geometry but sizes steps with entry-wise (AdamW-matching) geometry, because empirically networks seem to want roughly constant per-entry update magnitude across layers regardless of shape. Both readings are correct; they're the same equation viewed from different angles. The Moonlight paper picked entry-wise sizing because it makes hyperparameter sharing tractable, and for a distillation setup that's juggling teacher selection, loss weights, and head architecture, removing optimizer hyperparameter drift from the search space is worth a lot.
+
+### Caveats: where the per-layer spectral view holds, where it doesn't
+
+The "constrain each weight matrix's spectral change per step" story is rigorous only when the network is a composition of linear maps and pointwise Lipschitz-bounded nonlinearities. Each linear stage has a well-defined spectral norm; ReLU, GELU, tanh, sigmoid, LayerNorm, and RMSNorm are all bounded-Lipschitz; and Lipschitz constants compose multiplicatively, so bounding each $\|\Delta W_l\|_2$ bounds the network's global behavior to first order. There's no "spectral norm of the whole network" object to speak of — the network is nonlinear and has no SVD — but the Jacobian at any input does, and its spectral norm is bounded by the product of the per-layer norms times the activation Lipschitz constants. That's how a per-matrix step-size constraint translates to global stability.
+
+Attention breaks this cleanly. The softmax over $QK^\top / \sqrt{d}$ involves a *quadratic* form in the activations, and the resulting map is not globally Lipschitz — its effective Lipschitz constant grows with activation scale (Kim et al. 2021 work this out formally for self-attention). Spectral-norm control on $W_Q$ and $W_K$ controls the projections themselves, but it does not bound the softmax-of-product downstream. This is why production transformers add QK-norm (RMSNorm on $Q$ and $K$ before the dot product), scaled initialization, and pre-LN on residual streams — those are stability mechanisms layered on top of the optimizer to handle the attention-shaped non-Lipschitz region. Muon doesn't claim to solve attention stability; it provides well-conditioned per-matrix updates, and the architecture handles the rest.
+
+Conv2d is the easier case. A 2D convolution is fully linear; its weight tensor has shape $[C_{\text{out}}, C_{\text{in}}, k_H, k_W]$, but the operation is a linear map and has a well-defined SVD (computable exactly via FFT per Sedghi et al. 2019). The standard Muon convention is to flatten the kernel into the input dimension — $[C_{\text{out}}, C_{\text{in}} \cdot k_H \cdot k_W]$ — and orthogonalize that 2D matrix. This is a useful approximation rather than the exact operator-space SVD, but it captures the dominant amplification mode (channel mixing usually dwarfs spatial mixing in a standard kernel).
+
+### The practical recipe
+
+PyTorch's official `torch.optim.Muon` (added in 2.9) handles only 2D parameters and errors on anything else — there's no automatic conv2d flattening. The implementation includes the consistent-RMS scaling but behind an opt-in flag:
+
+```python
+muon_params = [
+    p for n, p in model.named_parameters()
+    if p.ndim == 2
+    and "embed" not in n
+    and "head" not in n
+    and "norm" not in n
+]
+muon_ids = {id(p) for p in muon_params}
+adamw_params = [p for p in model.parameters() if id(p) not in muon_ids]
+
+optimizer_muon = torch.optim.Muon(
+    muon_params,
+    lr=lr,
+    weight_decay=weight_decay,
+    adjust_lr_fn="match_rms_adamw",   # opt into the sqrt(max(A,B)) scaling
+)
+optimizer_adamw = torch.optim.AdamW(
+    adamw_params, lr=lr, weight_decay=weight_decay,
+)
+```
+
+The `match_rms_adamw` flag selects the $0.2\sqrt{\max(A,B)}$ scaling from the paper. The default (`"original"`) only does Keller Jordan's aspect-ratio correction $\sqrt{\max(1, A/B)}$ — fine for small models with mostly-square matrices, but it leaves you re-tuning learning rates at ViT-L and above. Always opt in for serious training.
+
+Flash-attention varlen kernels are orthogonal to all of this — they're a forward-pass implementation and Muon never sees them; the projection matrices they read are 2D and get handled normally. If you have conv layers (a patch-embedding stem, a CNN-style vision tower, anything 4D), put them in the AdamW group; don't try to coerce a 4D tensor into Muon without thinking through the flattening and scaling explicitly.
+
+For multi-teacher encoder distillation specifically, three points are worth highlighting. First, the per-teacher head MLPs are 2D — they go in the Muon group. The residual adapter design from earlier in this post is exactly the kind of architecture Muon handles cleanly: stacks of 2D linear projections (Muon group) interleaved with LayerNorms whose scalar gain/bias parameters go in the AdamW group. Second, the patch-embedding conv at the front of a ViT goes in AdamW; the cost is marginal because it's a single small layer. Third, the consistent-RMS scaling matters most when you change architecture variants — MHA vs. GQA vs. MLA produce attention projection matrices of different shapes, and `match_rms_adamw` lets you swap variants without re-tuning the learning rate.
+
+The honest summary: Muon is not magic, and there is no published encoder-distillation benchmark to quote a precise number against. In the language-model regime where the optimizer *has* been benchmarked, it reaches a given training loss roughly 1.35× faster than AdamW (Keller Jordan's FineWeb speedrun) and similar order in the Moonlight ablations. Expect comparable but not identical gains for an encoder student — the more distinctively matrix-shaped your parameters, the better Muon does relative to AdamW. What it really buys you beyond wall-clock is *interpretability of the optimizer*: every step is the spectral-norm-steepest direction with a known, layer-shape-aware budget. When something goes wrong in distillation — head collapse, dense-probe regression, one teacher's signal disappearing — you can rule out optimizer pathology cleanly, instead of wondering whether AdamW's per-coordinate adaptive step sizes have implicitly absorbed one of the loss imbalances you were supposed to be controlling explicitly. That decoupling is the underrated reason to switch.
+
 ## Evaluation: how to tell if the student actually inherited capability
 
 A good encoder eval suite has three properties: it probes the *trunk* (not the distillation heads), it covers the axes the teachers were chosen for, and it includes at least one head-to-head with each teacher rather than just absolute numbers.
