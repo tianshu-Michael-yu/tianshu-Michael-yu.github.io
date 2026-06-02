@@ -77,6 +77,72 @@ Su Jianlin's blog post [苏剑林, 2024](https://www.spaces.ac.cn/archives/11647
 
 ---
 
+## Muon Variants: The Schatten Norm Family
+
+The spectral, Frobenius, and nuclear norms are all special cases of the **Schatten $p$-norm**:
+
+$$
+\|A\|_p = \left(\sum_i \sigma_i(A)^p\right)^{1/p},
+$$
+
+with $p=\infty$ giving the spectral norm $\sigma_{\max}$, $p=2$ giving the Frobenius norm $\sqrt{\sum \sigma_i^2}$, and $p=1$ giving the nuclear norm $\sum \sigma_i$. The key duality: the dual norm of $\|\cdot\|_p$ is $\|\cdot\|_q$ for $1/p + 1/q = 1$, so spectral and nuclear are duals of each other, and Frobenius is self-dual.
+
+Since steepest descent under $\|\cdot\|$ maximizes $\text{Tr}(G^\top U)$ over $\|U\| \leq 1$, and the maximizer is the dual-norm ball's exposure in direction $G$, we get a distinct optimizer for each norm:
+
+| Budget constraint | Update $U^*$ | Frobenius norm of $U^*$ | Name |
+|---|---|---|---|
+| $\|U\|_2 \leq 1$ (spectral) | $U_G V_G^\top$ — all $\sigma_i = 1$ | $\sqrt{\min(m,n)}$ | **Muon** |
+| $\|U\|_F \leq 1$ (Frobenius) | $G / \|G\|_F$ — normalized gradient | $1$ | Normalized SGD |
+| $\|U\|_* \leq 1$ (nuclear) | $u_1 v_1^\top$ — top singular pair only | $1$ | Rank-1 power step |
+
+The differences become sharp when you look at **how each update treats the singular value spectrum of the gradient**:
+
+- **Frobenius** renormalizes the whole gradient to unit length. It keeps the relative sizes of all singular values intact — directions with large $\sigma_i$ get large updates, small-$\sigma_i$ directions get starved. This is just rescaled gradient descent; it does nothing to equalize learning across the weight matrix's singular directions.
+
+- **Spectral (Muon)** sets *every* singular value of the update to 1. The polar factor $U_G V_G^\top$ discards the singular values entirely, giving equal update energy to every singular direction of the gradient. This is the equalizing property: no direction is privileged just because it happened to accumulate a large gradient.
+
+- **Nuclear** takes only the top singular pair $u_1 v_1^\top$ — a rank-1 step in the direction of greatest gradient. This concentrates all the update mass on the single most important direction and ignores the rest. It is the most "focused" option but also the most aggressive in ignoring lower-ranked gradient directions.
+
+### The Frobenius Norm as the Wrong Penalty for Matrices
+
+The reason Frobenius is the "wrong" choice for matrix parameters connects back to the activation-change argument. Suppose you normalize the gradient to $\|G\|_F = 1$. The Frobenius norm spreads its mass across all $mn$ entries — but the functional effect on activations is dominated by the large singular values. A gradient with $\sigma_1 \gg \sigma_2, \ldots$ and $\|G\|_F = 1$ will drive $\|Gx\|$ almost entirely via $\sigma_1$; the remaining directions receive tiny updates. Over many steps, the weight matrix's lower singular directions learn much more slowly, effectively wasting capacity.
+
+Spectral-norm budgeting avoids this: by forcing all singular values of the update to 1, every singular direction of the gradient gets equal learning opportunity regardless of the raw gradient magnitude in that direction. This is why the polar factor has Frobenius norm $\sqrt{\min(m,n)}$ rather than 1 — the extra mass comes from the equalization, not from aggressive scaling.
+
+More precisely: if the gradient spectrum is well-distributed (all $\sigma_i \approx \sigma$), then $\|G\|_F \approx \sigma \sqrt{\min(m,n)}$ and $G/\|G\|_F \approx U_G V_G^\top / \sqrt{\min(m,n)}$, so Frobenius-normalized SGD approximates a scaled Muon. The gap widens as the gradient becomes rank-deficient or ill-conditioned — exactly the regime common in deep network training.
+
+### Muon as Nuclear-Norm Lion
+
+There is a second, algebraically distinct way to arrive at the same polar-factor update, highlighted by the [Lion-$\mathcal{K}$ framework](https://arxiv.org/abs/2506.15054). The **matrix sign function** $\text{msgn}(M)$ is a subgradient of the nuclear norm $\|M\|_* = \sum \sigma_i$, and $\text{msgn}(M) = UV^\top = \operatorname{polar}(M)$ for full-rank $M$. So Muon can equivalently be written as:
+
+$$
+W_{t+1} \leftarrow W_t - \eta \lambda W_t - \eta \, \nabla \|\cdot\|_*(M_t),
+$$
+
+which is exactly Lion-$\mathcal{K}$ with $\mathcal{K} = \|\cdot\|_*$ (the nuclear norm). Because Lion-$\mathcal{K}$ with decoupled weight decay implicitly solves a constrained problem, this means Muon is implicitly solving:
+
+$$
+\min_{W} \mathcal{L}(W) \quad \text{s.t.} \quad \|W\|_2 \leq \frac{1}{\lambda},
+$$
+
+i.e., it keeps the weight matrix's spectral norm (largest singular value) bounded by $1/\lambda$. Weight decay therefore plays a dual role: it is simultaneously a regularizer *and* a constraint on the operator norm of each weight matrix. This gives a clean picture of what Muon with weight decay actually optimizes — it is not just loss minimization, but loss minimization inside a spectral-norm ball.
+
+### Practical Variants
+
+Su Jianlin's optimizer guide [苏剑林, 2025](https://www.spaces.ac.cn/archives/11416) covers the practical implications of these norm choices and how to use Muon alongside other optimizers in a real training setup. The key design question for practitioners is: **which parameters get which norm?**
+
+In the standard MuonAdam setup, weight matrices get the spectral-norm LMO (polar factor), while vector parameters (biases, LayerNorm scales, embedding tables) get Adam — because Adam's per-coordinate adaptive scaling is the natural steepest descent under a per-entry $\ell^\infty$ norm, which is appropriate for semantically independent scalar parameters. Crawshaw et al. ([2025](https://arxiv.org/abs/2510.09827)) formalize this as constrained steepest descent under the product norm:
+
+$$
+\|(W_1, \ldots, W_L, \theta)\|_\text{MuonAdam} = \max\!\left(\max_\ell \|W_\ell\|_2,\; \frac{\eta_m}{\eta_b} \|\theta\|_{\text{ada},\infty}\right),
+$$
+
+where $\|\cdot\|_{\text{ada},\infty}$ is Adam's adaptive $\ell^\infty$ norm. The ratio $\eta_m/\eta_b$ allows separate learning rates for matrices and vectors, which in practice is crucial — Muon matrices typically use $10\times$ larger learning rates than the Adam parameters.
+
+Their variant **MuonMax** uses regularized (rather than constrained) steepest descent and scales each layer's polar factor by the nuclear norm of its momentum buffer, giving each matrix an adaptive step size. This is more expensive (requires the nuclear norm at each layer) but significantly more robust to learning rate tuning.
+
+---
+
 ## The Algorithm
 
 A naive implementation would compute the SVD at every step, which costs $O(\min(m,n) \cdot mn)$ and is slow on modern accelerators. Muon instead uses a **Newton-Schulz iteration** to compute the polar factor using only matrix multiplications.
