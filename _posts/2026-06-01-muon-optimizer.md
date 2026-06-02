@@ -55,7 +55,17 @@ $$
 U^* = \arg\max_{U} \, \text{Tr}(G^\top U) \quad \text{subject to} \quad \|U\|_2 \leq 1,
 $$
 
-where $G = \nabla_W \mathcal{L}$ and the inner product $\text{Tr}(G^\top U)$ is the first-order decrease in loss. This is steepest descent in spectral norm.
+where $G = \nabla_W \mathcal{L}$. This is steepest descent in spectral norm.
+
+**Why $\text{Tr}(G^\top U)$?** The first-order Taylor expansion of the loss gives:
+
+$$
+\mathcal{L}(W - \eta U) \approx \mathcal{L}(W) - \eta \, \langle \nabla_W \mathcal{L},\, U \rangle = \mathcal{L}(W) - \eta \, \text{Tr}(G^\top U).
+$$
+
+The inner product $\langle A, B \rangle = \text{Tr}(A^\top B)$ is simply the Frobenius inner product — the dot product of the two matrices' entries laid flat. So $\text{Tr}(G^\top U)$ measures how much the loss decreases per unit of $U$ in the gradient direction. Maximizing it over $\|U\|_2 \leq 1$ asks: *among all matrix updates with spectral norm at most 1, which one points most in the gradient's direction?*
+
+Crucially, the **constraint** is spectral ($\|U\|_2 \leq 1$) while the **objective** uses the Frobenius inner product. These are different norms doing different jobs: the Frobenius inner product measures alignment with the gradient; the spectral norm constraint controls functional impact on activations. By norm duality — the dual of the spectral norm is the nuclear norm — the maximum value of $\text{Tr}(G^\top U)$ over the spectral-norm ball is $\|G\|_*$ (the nuclear norm of $G$), and the maximizer is the polar factor $U_G V_G^\top$.
 
 **The solution is the polar factor.** Write $G = U_G \Sigma_G V_G^\top$ (thin SVD). Then:
 
