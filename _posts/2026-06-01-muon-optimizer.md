@@ -27,6 +27,38 @@ The question Muon answers is: *what is the steepest descent direction for a matr
 
 ---
 
+## Three Characteristics of a Well-Behaved Model
+
+Before asking what the ideal update looks like, it helps to ask what it means for a model to be *well-behaved* throughout training. Su Jianlin's framework ([苏剑林, 2025](https://www.spaces.ac.cn/archives/11340)) identifies three stability properties for a linear layer $W \in \mathbb{R}^{m \times n}$:
+
+**1. Forward stability.** The output scale should match the input scale. For any input $x$:
+
+$$
+\|Wx\|_2 \leq \|W\|_2 \cdot \|x\|_2,
+$$
+
+so bounding $\|W\|_2 = O(1)$ ensures activations don't blow up through depth. The tightest such bound is exactly the spectral norm, achieved when $x$ is the top right singular vector of $W$.
+
+**2. Backward stability.** Gradients $\delta$ propagate backwards through $W^\top$:
+
+$$
+\|W^\top \delta\|_2 \leq \|W^\top\|_2 \cdot \|\delta\|_2 = \|W\|_2 \cdot \|\delta\|_2.
+$$
+
+Since $\|W^\top\|_2 = \|W\|_2$, forward and backward stability are controlled by the same spectral norm. A model that is forward-stable is automatically backward-stable.
+
+**3. Increment stability.** When $W$ is updated to $W + \Delta W$, the change in output for any input $x$ is:
+
+$$
+\|(W + \Delta W)x - Wx\|_2 = \|\Delta W \, x\|_2 \leq \|\Delta W\|_2 \cdot \|x\|_2.
+$$
+
+For each training step to make a comparably-sized functional change across all layers — regardless of model width or gradient magnitude — we need $\|\Delta W\|_2 = O(\eta)$ uniformly.
+
+The **spectral condition** unifies all three: $\|W\|_2 = O(1)$ at initialization (properties 1 & 2), and $\|\Delta W\|_2 = O(\eta)$ at each step (property 3). Muon enforces the increment condition exactly — the polar factor $\operatorname{polar}(G)$ satisfies $\|\operatorname{polar}(G)\|_2 = 1$, so every step produces a worst-case functional shift of exactly $\eta$, independent of layer width or gradient scale. Weight decay handles the parameter condition, keeping $\|W\|_2 \leq 1/\lambda$ throughout training. Together they maintain all three stability properties.
+
+---
+
 ## Steepest Descent Under the Spectral Norm
 
 ### What should we measure: parameter change or activation change?
@@ -57,13 +89,25 @@ $$
 
 where $G = \nabla_W \mathcal{L}$. This is steepest descent in spectral norm.
 
-**Why $\text{Tr}(G^\top U)$?** The first-order Taylor expansion of the loss gives:
+**Why $\text{Tr}(G^\top U)$?** The gradient $G = \nabla_W \mathcal{L}$ is the matrix of partial derivatives, with $G_{ij} = \partial \mathcal{L}/\partial W_{ij}$. When the weight matrix shifts by a small amount $\delta W$, the first-order change in loss is the sum of each partial derivative times its corresponding weight change:
 
 $$
-\mathcal{L}(W - \eta U) \approx \mathcal{L}(W) - \eta \, \langle \nabla_W \mathcal{L},\, U \rangle = \mathcal{L}(W) - \eta \, \text{Tr}(G^\top U).
+\delta \mathcal{L} = \sum_{i,j} \frac{\partial \mathcal{L}}{\partial W_{ij}} \delta W_{ij} = \sum_{i,j} G_{ij} \, \delta W_{ij}.
 $$
 
-The inner product $\langle A, B \rangle = \text{Tr}(A^\top B)$ is simply the Frobenius inner product — the dot product of the two matrices' entries laid flat. So $\text{Tr}(G^\top U)$ measures how much the loss decreases per unit of $U$ in the gradient direction. Maximizing it over $\|U\|_2 \leq 1$ asks: *among all matrix updates with spectral norm at most 1, which one points most in the gradient's direction?*
+This entry-wise sum is the **Frobenius inner product** $\langle G, \delta W \rangle_F$. To see why this equals a trace, expand:
+
+$$
+\text{Tr}(G^\top \delta W) = \sum_i (G^\top \delta W)_{ii} = \sum_i \sum_j G^\top_{ij} \, \delta W_{ji} = \sum_{i,j} G_{ji} \, \delta W_{ji} = \sum_{i,j} G_{ij} \, \delta W_{ij}.
+$$
+
+So $\delta \mathcal{L} = \text{Tr}(G^\top \delta W)$ — the loss change is just the "dot product" of $G$ and $\delta W$ when both are treated as flat vectors. The first-order Taylor expansion for a step $\delta W = -\eta U$ is therefore:
+
+$$
+\mathcal{L}(W - \eta U) \approx \mathcal{L}(W) - \eta \, \text{Tr}(G^\top U).
+$$
+
+So $\text{Tr}(G^\top U)$ measures how much the loss decreases per unit of $U$ in the gradient's direction. Maximizing it over $\|U\|_2 \leq 1$ asks: *among all matrix updates with spectral norm at most 1, which one points most in the gradient's direction?*
 
 Crucially, the **constraint** is spectral ($\|U\|_2 \leq 1$) while the **objective** uses the Frobenius inner product. These are different norms doing different jobs: the Frobenius inner product measures alignment with the gradient; the spectral norm constraint controls functional impact on activations. By norm duality — the dual of the spectral norm is the nuclear norm — the maximum value of $\text{Tr}(G^\top U)$ over the spectral-norm ball is $\|G\|_*$ (the nuclear norm of $G$), and the maximizer is the polar factor $U_G V_G^\top$.
 
@@ -121,21 +165,31 @@ Spectral-norm budgeting avoids this: by forcing all singular values of the updat
 
 More precisely: if the gradient spectrum is well-distributed (all $\sigma_i \approx \sigma$), then $\|G\|_F \approx \sigma \sqrt{\min(m,n)}$ and $G/\|G\|_F \approx U_G V_G^\top / \sqrt{\min(m,n)}$, so Frobenius-normalized SGD approximates a scaled Muon. The gap widens as the gradient becomes rank-deficient or ill-conditioned — exactly the regime common in deep network training.
 
-### Muon as Nuclear-Norm Lion
+### How Muon Controls the Spectral Norm
 
-There is a second, algebraically distinct way to arrive at the same polar-factor update, highlighted by the [Lion-$\mathcal{K}$ framework](https://arxiv.org/abs/2506.15054). The **matrix sign function** $\text{msgn}(M)$ is a subgradient of the nuclear norm $\|M\|_* = \sum \sigma_i$, and $\text{msgn}(M) = UV^\top = \operatorname{polar}(M)$ for full-rank $M$. So Muon can equivalently be written as:
+The polar factor $O_t = \operatorname{polar}(M_t)$ always has **spectral norm exactly 1**: all its singular values are forced to 1 by construction. Each Muon step therefore adds a unit-spectral-norm matrix to $W$. Without weight decay, this would let $\|W\|_2$ grow without bound — every step pushes the weight matrix by a fixed-magnitude operator, so the spectral norm grows at rate $\sim \eta$ per step with no ceiling.
 
-$$
-W_{t+1} \leftarrow W_t - \eta \lambda W_t - \eta \, \nabla \|\cdot\|_*(M_t),
-$$
-
-which is exactly Lion-$\mathcal{K}$ with $\mathcal{K} = \|\cdot\|_*$ (the nuclear norm). Because Lion-$\mathcal{K}$ with decoupled weight decay implicitly solves a constrained problem, this means Muon is implicitly solving:
+Weight decay is what provides the ceiling. The update rule is:
 
 $$
-\min_{W} \mathcal{L}(W) \quad \text{s.t.} \quad \|W\|_2 \leq \frac{1}{\lambda},
+W_{t+1} = W_t + \eta(O_t - \lambda W_t) = (1 - \eta\lambda)W_t + \eta O_t.
 $$
 
-i.e., it keeps the weight matrix's spectral norm (largest singular value) bounded by $1/\lambda$. Weight decay therefore plays a dual role: it is simultaneously a regularizer *and* a constraint on the operator norm of each weight matrix. This gives a clean picture of what Muon with weight decay actually optimizes — it is not just loss minimization, but loss minimization inside a spectral-norm ball.
+Because $\|O_t\|_2 \leq 1$, whenever $\|\lambda W_t\|_2 > 1$ (i.e., $\|W_t\|_2 > 1/\lambda$), the weight decay term $-\eta\lambda W_t$ is larger in operator norm than the update $\eta O_t$, so $\|W_{t+1}\|_2 < \|W_t\|_2$ — the spectral norm shrinks back. More precisely (Chen et al., [2025](https://arxiv.org/abs/2506.15054), Proposition 1): for any update $X_{t+1} = X_t + \eta_t(O_t - \lambda X_t)$ with $\|O_t\|_2 \leq 1$ and $\eta_t \lambda \leq 1$,
+
+$$
+\|X_t\|_2 - \frac{1}{\lambda} \leq \prod_{s=0}^{t-1}(1 - \eta_s\lambda)\!\left(\|X_0\|_2 - \frac{1}{\lambda}\right).
+$$
+
+Since $(1-\eta_s\lambda) < 1$, the excess above $1/\lambda$ decays **exponentially** to zero, regardless of the initialization. So $\|W\|_2$ converges to the constraint ball $\|W\|_2 \leq 1/\lambda$ at an exponential rate determined by $\eta\lambda$.
+
+### Why Weight Decay is Necessary in Muon
+
+Setting $\lambda = 0$ collapses the spectral norm constraint: the bound $1/\lambda \to \infty$, so no constraint is enforced and $\|W\|_2$ can grow unboundedly.
+
+Without weight decay the update is $W_{t+1} = W_t + \eta O_t$ with $\|O_t\|_2 = 1$, so the spectral norm satisfies $\|W_t\|_2 \leq \|W_0\|_2 + \eta t$ — it grows linearly. In practice this leads to training instability: the weight matrices become large operators that amplify activations at every layer, destabilizing the forward pass and making loss spikes likely.
+
+The $\lambda$-dependence also means **weight decay is not just regularization** in Muon — it is a core hyperparameter that sets the scale of the network's linear maps. Choosing $\lambda$ is equivalent to choosing the maximum allowed spectral norm $1/\lambda$ of each weight matrix, which in turn sets the maximum activation amplification per layer. This is a much more interpretable handle than the ad-hoc weight decay schedules common in AdamW training.
 
 ### Practical Variants
 
@@ -150,6 +204,38 @@ $$
 where $\|\cdot\|_{\text{ada},\infty}$ is Adam's adaptive $\ell^\infty$ norm. The ratio $\eta_m/\eta_b$ allows separate learning rates for matrices and vectors, which in practice is crucial — Muon matrices typically use $10\times$ larger learning rates than the Adam parameters.
 
 Their variant **MuonMax** uses regularized (rather than constrained) steepest descent and scales each layer's polar factor by the nuclear norm of its momentum buffer, giving each matrix an adaptive step size. This is more expensive (requires the nuclear norm at each layer) but significantly more robust to learning rate tuning.
+
+### Why Embeddings and LM Head Use Normalized SGD
+
+MuonAdam applies Muon to matrix parameters and Adam to scalars/vectors. But there is a third category that needs its own treatment: **embedding tables** and the **LM head**. These are matrices, but applying Muon to them is the wrong choice — and the reason comes down to the structure of their inputs ([苏剑林, 2025](https://www.spaces.ac.cn/archives/11647)).
+
+For a regular linear layer $W \in \mathbb{R}^{m \times n}$, the input $x \in \mathbb{R}^n$ is a dense continuous vector. The worst-case output shift from an update $\Delta W$ over all unit-norm inputs is the spectral norm:
+
+$$\max_{\|x\|_2 = 1} \|\Delta W \, x\|_2 = \|\Delta W\|_2.$$
+
+This is exactly why spectral norm is the right budget for linear layers, and why the polar factor (which fixes $\|\Delta W\|_2 = 1$) gives increment stability.
+
+For an **embedding table** $E \in \mathbb{R}^{V \times d}$, the input is always a one-hot vector $e_i$ for some token $i$. The embedding lookup is a row read:
+
+$$(\Delta E)\, e_i = \Delta E[i, :].$$
+
+The functional effect of any update on a given input touches only a single row. The worst-case shift over all possible inputs is therefore the **max row norm**:
+
+$$\max_i \|\Delta E[i, :]\|_2 = \|\Delta E\|_{2,\infty}.$$
+
+Since inputs are never dense, the spectral norm is the wrong budget — it measures the worst case over all unit-norm directions, most of which never occur. The right increment stability condition is $\|\Delta E\|_{2,\infty} \leq \eta$: every token embedding moves by at most $\eta$.
+
+Plugging this into the steepest descent problem:
+
+$$U^* = \arg\max_U \, \text{Tr}(G^\top U) \quad \text{s.t.} \quad \max_i \|U[i,:]\|_2 \leq 1.$$
+
+The constraint decouples across rows, so we can maximize each row's contribution independently. By Cauchy–Schwarz, $G[i,:] \cdot U[i,:] \leq \|G[i,:]\|_2 \|U[i,:]\|_2 \leq \|G[i,:]\|_2$, with equality when $U[i,:] = G[i,:] / \|G[i,:]\|_2$. The solution is:
+
+$$U^*[i,:] = \frac{G[i,:]}{\|G[i,:]\|_2} \quad \text{for each row } i.$$
+
+This is **normalized SGD**: normalize each row of the gradient to unit norm before the update step. It is the per-row analog of Muon — instead of orthogonalizing across all singular directions (appropriate when the input spans all of $\mathbb{R}^n$), it normalizes independently in each row (appropriate when each input activates exactly one row).
+
+The **LM head** $W_\text{out} \in \mathbb{R}^{V \times d}$ follows the same logic from the output side. Each row $W_\text{out}[i,:]$ controls the logit for token $i$ via $W_\text{out}[i,:] \cdot h$. The per-token logit shift from a row update is $\Delta W_\text{out}[i,:] \cdot h$, bounded by the row norm. With $V \gg d$, the LM head is a tall matrix — exactly the regime where Muon's polar factor can produce highly non-uniform row norms (the leverage-score failure mode from the Aurora analysis), leaving some tokens' representations nearly frozen. Row-wise normalization avoids this by giving every token an equal per-step update.
 
 ---
 
@@ -281,4 +367,9 @@ The responsible conclusion is scale-dependent: Muon is a theoretically sound imp
 - Kosson et al., "Muon: Momentum Orthogonalized by Newton-Schulz" (2024)  
 - Dewulf\*, Pai\*, Yang\*, Zhang\*, Keigwin, "Aurora: A Leverage-Aware Optimizer for Rectangular Matrices," Tilde Research (2026). [blog](https://blog.tilderesearch.com/blog/aurora)  
 - Su Jianlin, "Muon 优化器的数学原理" (2024). [spaces.ac.cn](https://www.spaces.ac.cn/archives/11647)  
+- Su Jianlin, "MuP之上：1. 好模型的三个特征" (2025). [spaces.ac.cn](https://www.spaces.ac.cn/archives/11340)  
+- Su Jianlin, "MuP之上：2. 线性层与最速下降" (2025). [spaces.ac.cn](https://www.spaces.ac.cn/archives/11605)  
+- Su Jianlin, "MuP之上：3. 特殊情况特殊处理" (2025). [spaces.ac.cn](https://www.spaces.ac.cn/archives/11647)  
+- Su Jianlin, "Muon续集：为什么我们选择尝试Muon？" (2025). [spaces.ac.cn](https://www.spaces.ac.cn/archives/10739)  
+- Chen et al., "Muon Optimizes Under Spectral Norm Constraints" (2025). [arXiv:2506.15054](https://arxiv.org/abs/2506.15054)  
 - Jordan Keller, "modded-nanoGPT" speedrun. [GitHub](https://github.com/KellerJordan/modded-nanoGPT)
